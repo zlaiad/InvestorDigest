@@ -1,0 +1,28 @@
+[project]
+name = "investor-digest"
+version = "0.1.0"
+description = "Local-LLM pipeline for turning filings into retail-friendly explainers."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "beautifulsoup4>=4.12.3",
+  "fastapi>=0.115.12",
+  "httpx>=0.28.1",
+  "pydantic>=2.11.3",
+  "pypdf>=5.4.0",
+  "python-multipart>=0.0.20",
+  "uvicorn>=0.34.0",
+]
+
+[project.scripts]
+investor-digest = "investor_digest.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["investor_digest*"]
+
+[tool.setuptools.package-data]
+investor_digest = ["static/*"]

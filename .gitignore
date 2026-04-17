@@ -1,0 +1,25 @@
+.DS_Store
+
+# Local configuration
+.env.local
+.env
+
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE files
+.idea/
+.vscode/
+
+# Generated outputs
+outputs/
+
+# Optional: ignore downloaded filings if you do not want to upload raw data
+# sec_filings/
