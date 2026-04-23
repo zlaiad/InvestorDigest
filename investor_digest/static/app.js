@@ -1,6 +1,3 @@
-const samplePath =
-  "sec_filings/sec-edgar-filings/AAPL/10-K/0000320193-23-000106";
-
 const state = {
   digest: null,
   charts: [],
@@ -18,17 +15,18 @@ const statusProgressFillEl = document.getElementById("status-progress-fill");
 const pathInputEl = document.getElementById("path-input");
 const audienceEl = document.getElementById("audience");
 const languageEl = document.getElementById("language");
-const fileFormEl = document.getElementById("file-form");
+const analysisFormEl = document.getElementById("analysis-form");
 const fileInputEl = document.getElementById("file-input");
 const uploadZoneEl = document.getElementById("upload-zone");
-const filePickerButtonEl = document.getElementById("file-picker-button");
 const fileNameEl = document.getElementById("file-name");
-const uploadSubmitEl = document.getElementById("upload-submit");
+const generateButtonEl = document.getElementById("generate-button");
 const reportTitleEl = document.getElementById("report-title");
 const reportContentEl = document.getElementById("report-content");
 const emptyStateEl = document.getElementById("empty-state");
 const downloadJsonEl = document.getElementById("download-json");
 const printReportEl = document.getElementById("print-report");
+const summaryCompanyTitleEl = document.getElementById("summary-company-title");
+const companyAvatarEl = document.getElementById("company-avatar");
 
 const ANALYSIS_PROGRESS_STEPS = [
   { percent: 8, message: "正在读取文件和基础元数据…" },
@@ -39,15 +37,32 @@ const ANALYSIS_PROGRESS_STEPS = [
   { percent: 94, message: "正在完成最终报告排版…" },
 ];
 
-document.getElementById("sample-button").addEventListener("click", () => {
-  pathInputEl.value = samplePath;
-});
-
-document.getElementById("path-form").addEventListener("submit", async (event) => {
+analysisFormEl.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const [file] = fileInputEl.files;
   const path = pathInputEl.value.trim();
+  const audience = audienceEl.value.trim() || "普通投资者";
+  const language = languageEl.value;
+
+  if (file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("audience", audience);
+    formData.append("language", language);
+
+    await runAnalysis({
+      endpoint: "/api/analyze/file",
+      options: {
+        method: "POST",
+        body: formData,
+      },
+      label: `正在分析上传文件: ${file.name}`,
+    });
+    return;
+  }
+
   if (!path) {
-    setStatus("请输入财报路径。");
+    setStatus("请输入财报路径或上传文件。");
     return;
   }
 
@@ -58,41 +73,16 @@ document.getElementById("path-form").addEventListener("submit", async (event) =>
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         path,
-        audience: audienceEl.value.trim() || "普通投资者",
-        language: languageEl.value,
+        audience,
+        language,
       }),
     },
     label: `正在分析路径: ${path}`,
   });
 });
 
-fileFormEl.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const [file] = fileInputEl.files;
-  if (!file) {
-    setStatus("请先选择要上传的文件。");
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("audience", audienceEl.value.trim() || "普通投资者");
-  formData.append("language", languageEl.value);
-
-  await runAnalysis({
-    endpoint: "/api/analyze/file",
-    options: {
-      method: "POST",
-      body: formData,
-    },
-    label: `正在分析上传文件: ${file.name}`,
-  });
-});
-
 uploadZoneEl.addEventListener("click", (event) => {
-  if (event.target instanceof HTMLElement && event.target.closest("button")) {
-    return;
-  }
+  event.preventDefault();
   fileInputEl.click();
 });
 
@@ -104,19 +94,15 @@ uploadZoneEl.addEventListener("keydown", (event) => {
   fileInputEl.click();
 });
 
-filePickerButtonEl.addEventListener("click", () => fileInputEl.click());
-
 fileInputEl.addEventListener("change", () => {
   const [file] = fileInputEl.files;
   if (!file) {
-    fileNameEl.textContent = "尚未选择文件";
-    uploadSubmitEl.disabled = true;
+    fileNameEl.textContent = "支持 PDF / HTML / TXT";
     setProgress(0, "idle");
     return;
   }
 
   fileNameEl.textContent = file.name;
-  uploadSubmitEl.disabled = false;
   setProgress(0, "idle");
   setStatus(`已选择文件: ${file.name}`);
 });
@@ -148,10 +134,10 @@ async function detectRuntime() {
     }
     const payload = await response.json();
     runtimeModelEl.textContent = payload.model || "unknown";
-    runtimeStatusEl.textContent = "分析服务已连接，可以直接生成报告。";
+    runtimeStatusEl.textContent = "分析服务已连接";
   } catch (error) {
     runtimeModelEl.textContent = "离线";
-    runtimeStatusEl.textContent = "当前前端已就绪，但分析服务还没有响应。";
+    runtimeStatusEl.textContent = "当前服务未响应";
   }
 }
 
@@ -222,15 +208,24 @@ function finishProgress(message, stateName) {
 
 function toggleBusy(isBusy) {
   document.body.dataset.busy = String(isBusy);
-  uploadSubmitEl.disabled = isBusy || !fileInputEl.files?.length;
-  filePickerButtonEl.disabled = isBusy;
+  generateButtonEl.disabled = isBusy;
+  fileInputEl.disabled = isBusy;
+  pathInputEl.disabled = isBusy;
+  audienceEl.disabled = isBusy;
+  languageEl.disabled = isBusy;
+  uploadZoneEl.disabled = isBusy;
 }
 
 function renderDigest(digest) {
-  reportTitleEl.textContent = `${digest.company_name} · ${digest.reporting_period}`;
-  document.getElementById("meta-company").textContent = digest.company_name;
+  reportTitleEl.textContent = digest.company_name;
+  summaryCompanyTitleEl.textContent = digest.company_name;
+  document.getElementById("meta-company").textContent = digest.ticker || "10-K";
   document.getElementById("meta-period").textContent = digest.reporting_period;
   document.getElementById("meta-audience").textContent = digest.audience;
+  companyAvatarEl.textContent = buildCompanyAvatar(digest.company_name);
+  document.getElementById("generated-at").textContent = `报告生成时间：${new Date().toLocaleString("zh-Hans-CN", {
+    hour12: false,
+  })}`;
   document.getElementById("takeaway").textContent = digest.one_sentence_takeaway;
   document.getElementById("overview").innerHTML = marked.parse(
     digest.overview_markdown || ""
@@ -272,6 +267,7 @@ function fillFactSnapshot(items = []) {
   }
 
   items.forEach((item) => {
+    const trend = parseFactTrend(item.yoy_text || "");
     const card = document.createElement("article");
     card.className = "fact-card";
     card.innerHTML = `
@@ -280,14 +276,56 @@ function fillFactSnapshot(items = []) {
         <span class="confidence-pill">${escapeHtml(item.confidence || "medium")}</span>
       </div>
       <h4>${escapeHtml(item.value_text)}</h4>
-      <p class="fact-yoy">${escapeHtml(item.yoy_text || "同比数据暂缺")}</p>
-      <div class="fact-source">
-        <strong>来源：</strong> ${escapeHtml(item.source_label || "未标注")}
+      <div class="fact-trend">
+        <div class="fact-trend-row ${trend.yoy.tone}">
+          <span class="fact-trend-label">${escapeHtml(trend.yoy.label)}</span>
+          <span class="fact-trend-value">${escapeHtml(trend.yoy.value)}</span>
+        </div>
+        <div class="fact-trend-row ${trend.change.tone}">
+          <span class="fact-trend-label">${escapeHtml(trend.change.label)}</span>
+          <span class="fact-trend-value">${escapeHtml(trend.change.value)}</span>
+        </div>
       </div>
-      <p class="fact-snippet">${escapeHtml(item.source_snippet || "")}</p>
     `;
     target.appendChild(card);
   });
+}
+
+function parseFactTrend(text) {
+  const parts = String(text || "")
+    .split("·")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const yoyPart = parts.find((part) => part.startsWith("同比")) || "";
+  const changePart = parts.find((part) => part.startsWith("变化")) || "";
+
+  return {
+    yoy: buildTrendPart("同比", yoyPart.replace(/^同比\s*/u, "") || "--"),
+    change: buildTrendPart("变化", changePart.replace(/^变化\s*/u, "") || "--"),
+  };
+}
+
+function buildTrendPart(label, value) {
+  const trimmed = String(value || "--").trim();
+  return {
+    label,
+    value: trimmed,
+    tone: getTrendTone(trimmed),
+  };
+}
+
+function getTrendTone(value) {
+  if (!value || value === "--") {
+    return "is-neutral";
+  }
+  if (value.includes("+")) {
+    return "is-positive";
+  }
+  if (value.includes("-")) {
+    return "is-negative";
+  }
+  return "is-neutral";
 }
 
 function fillEvidenceCards(items = []) {
@@ -396,7 +434,9 @@ function renderCharts(chartSpecs = []) {
   state.charts = [];
 
   const grid = document.getElementById("charts-grid");
+  const featuredGrid = document.getElementById("featured-chart-grid");
   grid.innerHTML = "";
+  featuredGrid.innerHTML = "";
 
   if (!chartSpecs.length) {
     grid.innerHTML = `
@@ -412,41 +452,55 @@ function renderCharts(chartSpecs = []) {
     return;
   }
 
-  chartSpecs.forEach((spec, index) => {
-    const card = document.createElement("article");
-    card.className = `chart-card ${getChartCardClass(spec, index, chartSpecs)}`;
-    if (spec.chart_type === "sankey") {
-      card.classList.add("is-sankey");
-    }
-    const canvasId = `chart-${Math.random().toString(36).slice(2)}`;
-    card.innerHTML = `
-      <div class="chart-card-header">
-        <div>
-          <h3>${escapeHtml(spec.title)}</h3>
-          <p class="chart-copy">${escapeHtml(spec.why_it_matters || "")}</p>
-        </div>
-        <span class="confidence-pill">${escapeHtml(spec.confidence || "medium")}</span>
-      </div>
-      <div id="${canvasId}" class="chart-canvas"></div>
-      <div class="source-footnote">
-        <strong>数据线索：</strong> ${escapeHtml(spec.source_snippet || "")}
-      </div>
-    `;
-    grid.appendChild(card);
+  const featuredChart =
+    chartSpecs.find((spec) => spec.chart_type === "sankey") || null;
+  const regularCharts = featuredChart
+    ? chartSpecs.filter((spec) => spec !== featuredChart)
+    : chartSpecs;
 
-    const chart = echarts.init(document.getElementById(canvasId), null, {
-      renderer: "canvas",
-    });
-    chart.setOption(buildChartOption(spec));
-    state.charts.push(chart);
+  if (featuredChart) {
+    renderChartCard(featuredGrid, featuredChart, true, chartSpecs);
+  }
 
-    queueChartResize(chart);
-    if ("ResizeObserver" in window) {
-      const observer = new ResizeObserver(() => queueChartResize(chart));
-      observer.observe(card);
-      state.chartObservers.push(observer);
-    }
+  regularCharts.forEach((spec, index) => {
+    renderChartCard(grid, spec, false, regularCharts, index);
   });
+}
+
+function renderChartCard(target, spec, forceFeatured = false, chartSpecs = [], index = 0) {
+  const card = document.createElement("article");
+  card.className = `chart-card ${forceFeatured ? "featured" : getChartCardClass(spec, index, chartSpecs)}`;
+  if (spec.chart_type === "sankey") {
+    card.classList.add("is-sankey");
+  }
+  const canvasId = `chart-${Math.random().toString(36).slice(2)}`;
+  card.innerHTML = `
+    <div class="chart-card-header">
+      <div>
+        <h3>${escapeHtml(spec.title)}</h3>
+        <p class="chart-copy">${escapeHtml(spec.why_it_matters || "")}</p>
+      </div>
+      <span class="confidence-pill">${escapeHtml(spec.confidence || "medium")}</span>
+    </div>
+    <div id="${canvasId}" class="chart-canvas"></div>
+    <div class="source-footnote">
+      <strong>数据线索：</strong> ${escapeHtml(spec.source_snippet || "")}
+    </div>
+  `;
+  target.appendChild(card);
+
+  const chart = echarts.init(document.getElementById(canvasId), null, {
+    renderer: "canvas",
+  });
+  chart.setOption(buildChartOption(spec));
+  state.charts.push(chart);
+
+  queueChartResize(chart);
+  if ("ResizeObserver" in window) {
+    const observer = new ResizeObserver(() => queueChartResize(chart));
+    observer.observe(card);
+    state.chartObservers.push(observer);
+  }
 }
 
 function buildChartOption(spec) {
@@ -456,6 +510,9 @@ function buildChartOption(spec) {
     : ["#1d4ed8", "#0f766e", "#ea580c", "#56703d", "#b45309"];
   const valueFormatter = new Intl.NumberFormat(undefined, {
     maximumFractionDigits: 1,
+  });
+  const integerFormatter = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
   });
   const legendType = (spec.series || []).length > 3 ? "scroll" : "plain";
 
@@ -488,93 +545,99 @@ function buildChartOption(spec) {
   }
 
   if (spec.chart_type === "sankey") {
-    const wrapSankeyLabel = (value) => {
-      const text = String(value || "").trim();
-      if (!text || text.length <= 16 || !text.includes(" ")) {
-        return text;
-      }
-      const words = text.split(/\s+/);
-      const lines = [];
-      let current = "";
-      for (const word of words) {
-        const next = current ? `${current} ${word}` : word;
-        if (next.length > 16 && current) {
+      const wrapSankeyLabel = (value) => {
+        const text = String(value || "").trim();
+        if (!text || text.length <= 16 || !text.includes(" ")) {
+          return text;
+        }
+        const words = text.split(/\s+/);
+        const lines = [];
+        let current = "";
+        for (const word of words) {
+          const next = current ? `${current} ${word}` : word;
+          if (next.length > 16 && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = next;
+          }
+        }
+        if (current) {
           lines.push(current);
-          current = word;
-        } else {
-          current = next;
         }
-      }
-      if (current) {
-        lines.push(current);
-      }
-      return lines.slice(0, 2).join("\n");
-    };
-    const nodes = [...(spec.flow_nodes || [])]
-      .sort((a, b) => {
-        const depthA = Number(a?.depth ?? 99);
-        const depthB = Number(b?.depth ?? 99);
-        if (depthA !== depthB) {
-          return depthA - depthB;
-        }
-        return Number(a?.layout_order ?? 0) - Number(b?.layout_order ?? 0);
-      })
-      .map((node, index) => ({
-      name: node.name,
-      value: node.value ?? undefined,
-      depth: node.depth ?? undefined,
-      itemStyle: {
-        color: node.item_style_color || palette[index % palette.length],
-        borderColor: "rgba(23,49,58,0.08)",
-        borderWidth: 1,
-      },
-    }));
-    const links = (spec.flow_links || []).map((link) => ({
-      source: link.source,
-      target: link.target,
-      value: link.value,
-    }));
+        return lines.slice(0, 2).join("\n");
+      };
+      const formatSankeyValue = (value) => integerFormatter.format(Number(value || 0));
+      const nodes = [...(spec.flow_nodes || [])]
+        .sort((a, b) => {
+          const depthA = Number(a?.depth ?? 99);
+          const depthB = Number(b?.depth ?? 99);
+          if (depthA !== depthB) {
+            return depthA - depthB;
+          }
+          return Number(a?.layout_order ?? 0) - Number(b?.layout_order ?? 0);
+        })
+        .map((node, index) => ({
+        name: node.name,
+        value: node.value ?? undefined,
+        depth: node.depth ?? undefined,
+        itemStyle: {
+          color: node.item_style_color || palette[index % palette.length],
+          borderColor: "rgba(23,49,58,0.08)",
+          borderWidth: 1,
+        },
+      }));
+      const links = (spec.flow_links || []).map((link) => ({
+        source: link.source,
+        target: link.target,
+        value: link.value,
+      }));
 
-    return {
-      color: palette,
-      tooltip: {
-        trigger: "item",
-        valueFormatter: (value) => valueFormatter.format(Number(value || 0)),
-      },
-      series: [
-        {
-          type: "sankey",
-          left: 36,
-          top: 40,
-          right: 210,
-          bottom: 24,
-          emphasis: { focus: "adjacency" },
-          draggable: false,
-          nodeAlign: "left",
-          layoutIterations: 32,
-          nodeWidth: 26,
-          nodeGap: 34,
-          data: nodes,
-          links,
-          lineStyle: {
-            color: "gradient",
-            curveness: 0.38,
-            opacity: 0.48,
-          },
-          label: {
-            color: "#17313a",
-            fontSize: 14,
-            fontWeight: 600,
-            position: "right",
-            distance: 10,
-            width: 180,
-            overflow: "break",
-            formatter: (params) => wrapSankeyLabel(params?.name),
+      return {
+        color: palette,
+        tooltip: {
+          trigger: "item",
+          formatter: (params) => {
+            if (params.dataType === "edge") {
+              return `${escapeHtml(params.data.source)} → ${escapeHtml(params.data.target)}<br/>${formatSankeyValue(params.data.value)}（百万美元）`;
+            }
+            return `${escapeHtml(params.name)}<br/>${formatSankeyValue(params.value)}（百万美元）`;
           },
         },
-      ],
-    };
-  }
+        series: [
+          {
+            type: "sankey",
+            left: 40,
+            top: 28,
+            right: 220,
+            bottom: 20,
+            emphasis: { focus: "adjacency" },
+            draggable: false,
+            nodeAlign: "left",
+            layoutIterations: 32,
+            nodeWidth: 26,
+            nodeGap: 34,
+            data: nodes,
+            links,
+            lineStyle: {
+              color: "gradient",
+              curveness: 0.46,
+              opacity: 0.56,
+            },
+            label: {
+              color: "#17313a",
+              fontSize: 13,
+              fontWeight: 600,
+              position: "right",
+              distance: 10,
+              width: 194,
+              overflow: "break",
+              formatter: (params) => `${wrapSankeyLabel(params?.name)}\n${formatSankeyValue(params?.value)}`,
+            },
+          },
+        ],
+      };
+    }
 
   const isLineLike = spec.chart_type === "line" || spec.chart_type === "area";
   const isSingleSeries = (spec.series || []).length === 1;
@@ -724,6 +787,21 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function buildCompanyAvatar(name = "") {
+  const cleaned = String(name || "")
+    .replace(/\b(inc|inc\.|corporation|corp|corp\.|company|co\.|limited|ltd\.|class\s+[abcz])\b/gi, "")
+    .replace(/[^A-Za-z0-9\u4e00-\u9fff ]+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "ID";
+  }
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
 }
 
 detectRuntime();

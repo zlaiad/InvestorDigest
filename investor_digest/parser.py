@@ -3,6 +3,8 @@ from __future__ import annotations
 import html
 import json
 import re
+from datetime import date, datetime
+from itertools import combinations
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -325,6 +327,53 @@ ACCOUNTING_POLICY_KEYWORDS = (
     "estimated selling price",
 )
 
+IXBRL_METRIC_FACT_NAMES = {
+    "revenue": (
+        "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+        "us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+        "us-gaap:SalesRevenueNet",
+        "us-gaap:Revenues",
+    ),
+    "gross_profit": ("us-gaap:GrossProfit",),
+    "operating_income": ("us-gaap:OperatingIncomeLoss",),
+    "net_income": ("us-gaap:NetIncomeLoss",),
+    "diluted_eps": (
+        "us-gaap:EarningsPerShareDiluted",
+        "us-gaap:DilutedEarningsPerShare",
+    ),
+    "operating_cash_flow": ("us-gaap:NetCashProvidedByUsedInOperatingActivities",),
+    "cash_and_equivalents": ("us-gaap:CashAndCashEquivalentsAtCarryingValue",),
+    "short_term_investments": (
+        "us-gaap:MarketableSecuritiesCurrent",
+        "us-gaap:AvailableForSaleSecuritiesCurrent",
+        "us-gaap:AvailableForSaleDebtSecuritiesCurrent",
+    ),
+    "accounts_receivable": (
+        "us-gaap:AccountsReceivableNetCurrent",
+        "us-gaap:ReceivablesNetCurrent",
+    ),
+    "inventory": ("us-gaap:InventoryNet",),
+    "capital_expenditures": (
+        "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+        "us-gaap:CapitalExpendituresIncurredButNotYetPaid",
+    ),
+    "stock_based_compensation": (
+        "us-gaap:AllocatedShareBasedCompensationExpense",
+        "us-gaap:ShareBasedCompensation",
+    ),
+}
+
+IXBRL_DURATION_METRICS = {
+    "revenue",
+    "gross_profit",
+    "operating_income",
+    "net_income",
+    "diluted_eps",
+    "operating_cash_flow",
+    "capital_expenditures",
+    "stock_based_compensation",
+}
+
 EXPLANATION_SIGNAL_KEYWORDS = (
     "increase",
     "decrease",
@@ -400,6 +449,8 @@ def build_prepared_context(
     table_chunks = _build_table_chunks(document.text)
     note_chunks = _build_note_chunks(document.text)
     metric_records = _build_metric_records(
+        selected_file=document.selected_file,
+        file_type=document.file_type,
         section_snippets=section_snippets,
         narrative_chunks=narrative_chunks,
         table_chunks=table_chunks,
@@ -710,6 +761,8 @@ def _extract_section_snippets(
 
 def _build_metric_records(
     *,
+    selected_file: Path,
+    file_type: str,
     section_snippets: dict[str, str],
     narrative_chunks: list[FilingChunk],
     table_chunks: list[FilingChunk],
@@ -717,9 +770,14 @@ def _build_metric_records(
     reporting_period: str,
 ) -> list[MetricRecord]:
     table_metric_hits = _extract_metric_values_from_table_chunks(table_chunks, reporting_period)
+    ixbrl_metric_hits = (
+        _extract_metric_values_from_ixbrl(selected_file, reporting_period)
+        if file_type in {"html", "htm"}
+        else {}
+    )
     records: list[MetricRecord] = []
     for metric_name, spec in CORE_METRIC_SPECS.items():
-        table_hit = table_metric_hits.get(metric_name)
+        table_hit = ixbrl_metric_hits.get(metric_name) or table_metric_hits.get(metric_name)
         corroborating_sources, corroborating_evidence = _find_metric_corroboration(
             metric_name=metric_name,
             value=table_hit["value"] if table_hit else None,
@@ -926,6 +984,620 @@ def _build_table_chunks(text: str) -> list[FilingChunk]:
         }
     )
     return chunks
+
+
+def _extract_metric_values_from_ixbrl(
+    selected_file: Path,
+    reporting_period: str,
+) -> dict[str, dict[str, object]]:
+    if selected_file.suffix.lower() not in {".html", ".htm"}:
+        return {}
+
+    raw = selected_file.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(raw, "html.parser")
+    contexts = _parse_ixbrl_contexts(soup)
+    extracted: dict[str, dict[str, object]] = {}
+    report_year = _extract_period_from_text(reporting_period) or reporting_period
+
+    for metric_name, fact_names in IXBRL_METRIC_FACT_NAMES.items():
+        candidates: list[dict[str, object]] = []
+        for fact_name in fact_names:
+            for tag in soup.find_all("ix:nonfraction", attrs={"name": fact_name}):
+                parsed = _parse_ixbrl_fact(
+                    tag,
+                    contexts=contexts,
+                    metric_name=metric_name,
+                    target_unit=str(CORE_METRIC_SPECS[metric_name]["unit"]),
+                )
+                if parsed:
+                    candidates.append(parsed)
+        selected = _select_ixbrl_metric_series(metric_name, candidates, fallback_period=report_year)
+        if selected:
+            extracted[metric_name] = selected
+
+    debt_series = _extract_ixbrl_total_debt_series(contexts, soup, fallback_period=report_year)
+    if debt_series:
+        extracted["total_debt"] = debt_series
+
+    if "gross_profit" in extracted and "revenue" in extracted and "gross_margin" not in extracted:
+        revenue = float(extracted["revenue"]["value"] or 0)
+        gross_profit = float(extracted["gross_profit"]["value"] or 0)
+        previous_revenue = _to_float(extracted["revenue"].get("previous_value"))
+        previous_gross_profit = _to_float(extracted["gross_profit"].get("previous_value"))
+        if revenue > 0:
+            extracted["gross_margin"] = {
+                "value": round(gross_profit / revenue, 6),
+                "current_value": round(gross_profit / revenue, 6),
+                "previous_value": round(previous_gross_profit / previous_revenue, 6)
+                if previous_revenue and previous_gross_profit is not None
+                else None,
+                "unit": "ratio",
+                "period": report_year,
+                "source": "Inline XBRL facts",
+                "chunk_id": "",
+                "table_name": "Derived from Inline XBRL revenue and gross profit",
+                "evidence": (
+                    f"Computed from Inline XBRL facts revenue={revenue} and gross_profit={gross_profit}."
+                ),
+            }
+    if "operating_income" in extracted and "revenue" in extracted and "operating_margin" not in extracted:
+        revenue = float(extracted["revenue"]["value"] or 0)
+        operating_income = float(extracted["operating_income"]["value"] or 0)
+        previous_revenue = _to_float(extracted["revenue"].get("previous_value"))
+        previous_operating_income = _to_float(extracted["operating_income"].get("previous_value"))
+        if revenue > 0:
+            extracted["operating_margin"] = {
+                "value": round(operating_income / revenue, 6),
+                "current_value": round(operating_income / revenue, 6),
+                "previous_value": round(previous_operating_income / previous_revenue, 6)
+                if previous_revenue and previous_operating_income is not None
+                else None,
+                "unit": "ratio",
+                "period": report_year,
+                "source": "Inline XBRL facts",
+                "chunk_id": "",
+                "table_name": "Derived from Inline XBRL revenue and operating income",
+                "evidence": (
+                    f"Computed from Inline XBRL facts revenue={revenue} and operating_income={operating_income}."
+                ),
+            }
+    if "operating_cash_flow" in extracted and "capital_expenditures" in extracted and "free_cash_flow" not in extracted:
+        current_ocf = _to_float(extracted["operating_cash_flow"].get("value"))
+        current_capex = _to_float(extracted["capital_expenditures"].get("value"))
+        previous_ocf = _to_float(extracted["operating_cash_flow"].get("previous_value"))
+        previous_capex = _to_float(extracted["capital_expenditures"].get("previous_value"))
+        if current_ocf is not None and current_capex is not None:
+            extracted["free_cash_flow"] = {
+                "value": round(current_ocf - current_capex, 6),
+                "current_value": round(current_ocf - current_capex, 6),
+                "previous_value": round(previous_ocf - previous_capex, 6)
+                if previous_ocf is not None and previous_capex is not None
+                else None,
+                "unit": "USD_million",
+                "period": report_year,
+                "source": "Inline XBRL facts",
+                "chunk_id": "",
+                "table_name": "Derived from Inline XBRL operating cash flow and capex",
+                "evidence": (
+                    f"Computed from Inline XBRL facts operating_cash_flow={current_ocf} and capex={current_capex}."
+                ),
+            }
+
+    return extracted
+
+
+def _parse_ixbrl_contexts(soup: BeautifulSoup) -> dict[str, dict[str, object]]:
+    contexts: dict[str, dict[str, object]] = {}
+    for tag in soup.find_all("xbrli:context"):
+        context_id = str(tag.get("id") or "").strip()
+        if not context_id:
+            continue
+        start_date = _extract_ixbrl_context_date(tag, "startdate")
+        end_date = _extract_ixbrl_context_date(tag, "enddate")
+        instant_date = _extract_ixbrl_context_date(tag, "instant")
+        has_dimensions = bool(
+            tag.find(
+                lambda child: isinstance(getattr(child, "name", None), str)
+                and child.name.lower().endswith(("explicitmember", "typedmember"))
+            )
+        )
+        contexts[context_id] = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "instant_date": instant_date,
+            "has_dimensions": has_dimensions,
+            "duration_days": _context_duration_days(start_date, end_date),
+        }
+    return contexts
+
+
+def _extract_ixbrl_context_date(tag: object, suffix: str) -> str:
+    if not hasattr(tag, "find"):
+        return ""
+    found = tag.find(
+        lambda child: isinstance(getattr(child, "name", None), str)
+        and child.name.lower().endswith(suffix)
+    )
+    if not found:
+        return ""
+    return str(found.get_text(" ", strip=True) or "").strip()
+
+
+def _context_duration_days(start_date: str, end_date: str) -> int | None:
+    if not start_date or not end_date:
+        return None
+    try:
+        return (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days
+    except ValueError:
+        return None
+
+
+def _parse_ixbrl_fact(
+    tag: object,
+    *,
+    contexts: dict[str, dict[str, object]],
+    metric_name: str,
+    target_unit: str,
+) -> dict[str, object] | None:
+    if not hasattr(tag, "get") or not hasattr(tag, "get_text"):
+        return None
+    context_id = str(tag.get("contextref") or "").strip()
+    context = contexts.get(context_id)
+    if not context or context.get("has_dimensions"):
+        return None
+
+    raw_text = str(tag.get_text(" ", strip=True) or "").strip()
+    if not raw_text or not re.search(r"\d", raw_text):
+        return None
+
+    numeric_value = _parse_ixbrl_numeric_text(raw_text)
+    if numeric_value is None:
+        return None
+    if str(tag.get("sign") or "").strip() == "-":
+        numeric_value = -abs(numeric_value)
+
+    try:
+        scale = int(str(tag.get("scale") or "0").strip())
+    except ValueError:
+        scale = 0
+    normalized_value = _normalize_ixbrl_value(
+        numeric_value,
+        scale=scale,
+        target_unit=target_unit,
+    )
+    if normalized_value is None:
+        return None
+
+    period_key = ""
+    if metric_name in IXBRL_DURATION_METRICS:
+        period_key = str(context.get("end_date") or "")
+    else:
+        period_key = str(context.get("instant_date") or context.get("end_date") or "")
+
+    return {
+        "fact_name": str(tag.get("name") or "").strip(),
+        "context_id": context_id,
+        "period_kind": "duration" if metric_name in IXBRL_DURATION_METRICS else "instant",
+        "period_key": period_key,
+        "start_date": context.get("start_date"),
+        "end_date": context.get("end_date"),
+        "instant_date": context.get("instant_date"),
+        "duration_days": context.get("duration_days"),
+        "value": normalized_value,
+        "evidence": raw_text,
+    }
+
+
+def _parse_ixbrl_numeric_text(text: str) -> float | None:
+    cleaned = str(text).strip()
+    if not cleaned:
+        return None
+    negative = cleaned.startswith("(") and cleaned.endswith(")")
+    cleaned = cleaned.strip("()").replace(",", "")
+    cleaned = cleaned.replace("$", "").replace("%", "")
+    cleaned = re.sub(r"\s+", "", cleaned)
+    if cleaned in {"", "-", "—", "–"}:
+        return None
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    return -value if negative else value
+
+
+def _normalize_ixbrl_value(
+    numeric_value: float,
+    *,
+    scale: int,
+    target_unit: str,
+) -> float | None:
+    actual_value = numeric_value * (10**scale)
+    if target_unit == "USD_million":
+        return actual_value / 1_000_000
+    if target_unit == "USD_per_share":
+        return actual_value
+    if target_unit == "ratio":
+        return actual_value
+    return actual_value
+
+
+def _select_ixbrl_metric_series(
+    metric_name: str,
+    candidates: list[dict[str, object]],
+    *,
+    fallback_period: str,
+) -> dict[str, object] | None:
+    if not candidates:
+        return None
+
+    if metric_name in IXBRL_DURATION_METRICS:
+        preferred = [
+            candidate
+            for candidate in candidates
+            if candidate.get("period_kind") == "duration"
+            and isinstance(candidate.get("duration_days"), int)
+            and int(candidate["duration_days"]) >= 300
+        ]
+        pool = preferred or [candidate for candidate in candidates if candidate.get("period_kind") == "duration"] or candidates
+        ordered = sorted(
+            pool,
+            key=lambda candidate: (
+                str(candidate.get("end_date") or ""),
+                int(candidate.get("duration_days") or 0),
+            ),
+            reverse=True,
+        )
+    else:
+        pool = [candidate for candidate in candidates if candidate.get("period_kind") == "instant"] or candidates
+        ordered = sorted(
+            pool,
+            key=lambda candidate: str(candidate.get("instant_date") or candidate.get("end_date") or ""),
+            reverse=True,
+        )
+
+    distinct: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
+    for candidate in ordered:
+        period_key = str(candidate.get("period_key") or "")
+        if not period_key or period_key in seen_keys:
+            continue
+        seen_keys.add(period_key)
+        distinct.append(candidate)
+        if len(distinct) >= 2:
+            break
+    if not distinct:
+        return None
+
+    current = distinct[0]
+    previous = distinct[1] if len(distinct) > 1 else None
+    fact_name = str(current.get("fact_name") or "")
+    return {
+        "value": current.get("value"),
+        "current_value": current.get("value"),
+        "previous_value": previous.get("value") if previous else None,
+        "unit": str(CORE_METRIC_SPECS.get(metric_name, {}).get("unit", "")),
+        "period": str(current.get("period_key") or fallback_period),
+        "source": "Inline XBRL facts",
+        "chunk_id": "",
+        "table_name": fact_name or "Inline XBRL fact",
+        "evidence": f"{fact_name} ({current.get('context_id')}): {current.get('evidence')}",
+    }
+
+
+def _extract_ixbrl_total_debt_series(
+    contexts: dict[str, dict[str, object]],
+    soup: BeautifulSoup,
+    *,
+    fallback_period: str,
+) -> dict[str, object] | None:
+    current_candidates = []
+    for fact_name in ("us-gaap:LongTermDebtCurrent", "us-gaap:LongTermDebtAndCapitalLeaseObligationsCurrent"):
+        for tag in soup.find_all("ix:nonfraction", attrs={"name": fact_name}):
+            parsed = _parse_ixbrl_fact(
+                tag,
+                contexts=contexts,
+                metric_name="cash_and_equivalents",
+                target_unit="USD_million",
+            )
+            if parsed:
+                current_candidates.append(parsed)
+
+    noncurrent_candidates = []
+    for fact_name in ("us-gaap:LongTermDebtNoncurrent", "us-gaap:LongTermDebtAndCapitalLeaseObligations"):
+        for tag in soup.find_all("ix:nonfraction", attrs={"name": fact_name}):
+            parsed = _parse_ixbrl_fact(
+                tag,
+                contexts=contexts,
+                metric_name="cash_and_equivalents",
+                target_unit="USD_million",
+            )
+            if parsed:
+                noncurrent_candidates.append(parsed)
+
+    current_by_period = {
+        str(candidate.get("period_key") or ""): candidate
+        for candidate in current_candidates
+        if candidate.get("period_key")
+    }
+    noncurrent_by_period = {
+        str(candidate.get("period_key") or ""): candidate
+        for candidate in noncurrent_candidates
+        if candidate.get("period_key")
+    }
+    combined_candidates: list[dict[str, object]] = []
+    for period_key in sorted(set(current_by_period) & set(noncurrent_by_period), reverse=True):
+        current = current_by_period[period_key]
+        noncurrent = noncurrent_by_period[period_key]
+        combined_candidates.append(
+            {
+                "fact_name": "Inline XBRL total debt",
+                "period_key": period_key,
+                "instant_date": period_key,
+                "value": _to_float(current.get("value")) + _to_float(noncurrent.get("value")),
+                "context_id": period_key,
+                "evidence": (
+                    f"LongTermDebtCurrent={current.get('evidence')}; "
+                    f"LongTermDebtNoncurrent={noncurrent.get('evidence')}"
+                ),
+            }
+        )
+
+    if not combined_candidates:
+        return None
+
+    current = combined_candidates[0]
+    previous = combined_candidates[1] if len(combined_candidates) > 1 else None
+    return {
+        "value": current.get("value"),
+        "current_value": current.get("value"),
+        "previous_value": previous.get("value") if previous else None,
+        "unit": "USD_million",
+        "period": str(current.get("period_key") or fallback_period),
+        "source": "Inline XBRL facts",
+        "chunk_id": "",
+        "table_name": "Inline XBRL total debt (current + non-current)",
+        "evidence": str(current.get("evidence") or ""),
+    }
+
+
+def _extract_ixbrl_revenue_composition(
+    selected_file: Path,
+    reporting_period: str,
+    total_revenue: float,
+) -> dict[str, object] | None:
+    if selected_file.suffix.lower() not in {".html", ".htm"} or total_revenue <= 0:
+        return None
+
+    raw = selected_file.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(raw, "html.parser")
+    contexts = _parse_ixbrl_contexts(soup)
+    candidates: list[dict[str, object]] = []
+    axes_priority = (
+        "srt:ProductOrServiceAxis",
+        "us-gaap:StatementBusinessSegmentsAxis",
+    )
+
+    for fact_name in IXBRL_METRIC_FACT_NAMES["revenue"]:
+        for tag in soup.find_all("ix:nonfraction", attrs={"name": fact_name}):
+            context_id = str(tag.get("contextref") or "").strip()
+            context = contexts.get(context_id)
+            if not context or context.get("has_dimensions") is not True:
+                continue
+            dimension_members = _extract_ixbrl_dimension_members(soup, context_id)
+            if not dimension_members:
+                continue
+            label = ""
+            for axis_name in axes_priority:
+                member = dimension_members.get(axis_name)
+                if member:
+                    label = _normalize_ixbrl_dimension_label(member)
+                    if label:
+                        break
+            if not label:
+                continue
+            period_key = str(context.get("end_date") or "")
+            if period_key != (_extract_period_iso(reporting_period) or period_key):
+                if context.get("duration_days") and int(context["duration_days"]) < 300:
+                    continue
+            numeric_value = _parse_ixbrl_numeric_text(str(tag.get_text(" ", strip=True) or ""))
+            if numeric_value is None:
+                continue
+            try:
+                scale = int(str(tag.get("scale") or "0").strip())
+            except ValueError:
+                scale = 0
+            value = _normalize_ixbrl_value(
+                numeric_value,
+                scale=scale,
+                target_unit="USD_million",
+            )
+            if value is None or value <= 0 or value > total_revenue:
+                continue
+            candidates.append(
+                {
+                    "label": label,
+                    "value": value,
+                    "period_key": period_key,
+                    "context_id": context_id,
+                }
+            )
+
+    if not candidates:
+        return None
+
+    current_period = _extract_period_iso(reporting_period)
+    period_candidates = [
+        candidate for candidate in candidates if candidate.get("period_key") == current_period
+    ] or candidates
+
+    deduped: dict[str, dict[str, object]] = {}
+    for candidate in sorted(period_candidates, key=lambda item: float(item["value"]), reverse=True):
+        deduped.setdefault(str(candidate["label"]), candidate)
+    unique_candidates = list(deduped.values())
+    chosen = _choose_revenue_composition_subset(unique_candidates, total_revenue=total_revenue)
+    if len(chosen) < 2:
+        return None
+
+    return {
+        "segments": [{"name": str(item["label"]), "revenue": float(item["value"])} for item in chosen],
+        "source_label": "Inline XBRL revenue composition",
+    }
+
+
+def _extract_ixbrl_profit_flow_totals(
+    selected_file: Path,
+    reporting_period: str,
+) -> dict[str, float] | None:
+    if selected_file.suffix.lower() not in {".html", ".htm"}:
+        return None
+
+    raw = selected_file.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(raw, "html.parser")
+    contexts = _parse_ixbrl_contexts(soup)
+    current_period = _extract_period_iso(reporting_period)
+
+    def pick_fact_value(fact_names: tuple[str, ...]) -> float | None:
+        candidates: list[dict[str, object]] = []
+        for fact_name in fact_names:
+            for tag in soup.find_all("ix:nonfraction", attrs={"name": fact_name}):
+                parsed = _parse_ixbrl_fact(
+                    tag,
+                    contexts=contexts,
+                    metric_name="revenue",
+                    target_unit="USD_million",
+                )
+                if not parsed:
+                    continue
+                if parsed.get("period_key") != current_period:
+                    continue
+                candidates.append(parsed)
+        if not candidates:
+            return None
+        chosen = sorted(
+            candidates,
+            key=lambda item: (
+                str(item.get("period_key") or ""),
+                int(item.get("duration_days") or 0),
+            ),
+            reverse=True,
+        )[0]
+        return _to_float(chosen.get("value"))
+
+    cost_of_revenue = pick_fact_value(("us-gaap:CostOfRevenue",))
+    costs_and_expenses = pick_fact_value(("us-gaap:CostsAndExpenses",))
+    operating_expenses = pick_fact_value(("us-gaap:OperatingExpenses",))
+
+    if cost_of_revenue is None and costs_and_expenses is None and operating_expenses is None:
+        return None
+
+    payload: dict[str, float] = {}
+    if cost_of_revenue is not None:
+        payload["cost_of_revenue"] = cost_of_revenue
+    if operating_expenses is not None:
+        payload["operating_expenses"] = operating_expenses
+    if costs_and_expenses is not None:
+        payload["costs_and_expenses"] = costs_and_expenses
+    return payload
+
+
+def _extract_ixbrl_dimension_members(
+    soup: BeautifulSoup,
+    context_id: str,
+) -> dict[str, str]:
+    context = soup.find("xbrli:context", attrs={"id": context_id})
+    if not context:
+        return {}
+    members: dict[str, str] = {}
+    for member in context.find_all(
+        lambda child: isinstance(getattr(child, "name", None), str)
+        and child.name.lower().endswith("explicitmember")
+    ):
+        axis = str(member.get("dimension") or "").strip()
+        value = str(member.get_text(" ", strip=True) or "").strip()
+        if axis and value:
+            members[axis] = value
+    return members
+
+
+def _normalize_ixbrl_dimension_label(raw_member: str) -> str:
+    text = str(raw_member or "").strip()
+    if not text:
+        return ""
+    token = text.split(":")[-1]
+    token = re.sub(r"Member$", "", token)
+    replacements = {
+        "GoogleSearchOther": "Google Search & Other",
+        "YouTubeAdvertisingRevenue": "YouTube Ads",
+        "GoogleNetwork": "Google Network",
+        "SubscriptionsPlatformsAndDevicesRevenue": "Subscriptions, Platforms & Devices",
+        "GoogleServices": "Google Services",
+        "GoogleCloud": "Google Cloud",
+        "AllOtherSegments": "Other Bets",
+        "IPhone": "iPhone",
+        "IPad": "iPad",
+        "WearablesHomeandAccessories": "Wearables, Home & Accessories",
+        "Mac": "Mac",
+        "Service": "Services",
+        "Product": "Products",
+        "ProductivityAndBusinessProcesses": "Productivity & Business",
+        "IntelligentCloud": "Intelligent Cloud",
+        "MorePersonalComputing": "Personal Computing",
+    }
+    if token in replacements:
+        return replacements[token]
+    token = re.sub(r"([a-z])([A-Z])", r"\1 \2", token)
+    token = token.replace("And", "&")
+    return " ".join(token.split()).strip()
+
+
+def _choose_revenue_composition_subset(
+    candidates: list[dict[str, object]],
+    *,
+    total_revenue: float,
+) -> list[dict[str, object]]:
+    if not candidates:
+        return []
+    if len(candidates) > 12:
+        candidates = sorted(candidates, key=lambda item: float(item["value"]), reverse=True)[:12]
+
+    tolerance = max(1.0, total_revenue * 0.015)
+    best_subset: list[dict[str, object]] = []
+    best_score: tuple[float, int, float] | None = None
+
+    for size in range(2, len(candidates) + 1):
+        for subset in combinations(candidates, size):
+            total = sum(float(item["value"]) for item in subset)
+            diff = abs(total_revenue - total)
+            if diff > tolerance:
+                continue
+            generic_penalty = sum(
+                1.0
+                for item in subset
+                if str(item["label"]) in {"Products", "Services", "Google Services"}
+            )
+            score = (diff, -len(subset), generic_penalty)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_subset = list(subset)
+
+    if best_subset:
+        return sorted(best_subset, key=lambda item: float(item["value"]), reverse=True)
+
+    fallback = [item for item in candidates if float(item["value"]) / total_revenue >= 0.05]
+    return sorted(fallback, key=lambda item: float(item["value"]), reverse=True)
+
+
+def _extract_period_iso(reporting_period: str) -> str:
+    text = str(reporting_period or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+    for fmt in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except Exception:
+            continue
+    match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+    return match.group(1) if match else ""
 
 
 def _collect_table_chunks_from_search_space(

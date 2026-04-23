@@ -6,8 +6,21 @@ from copy import deepcopy
 from dataclasses import asdict
 
 from investor_digest.config import Settings
-from investor_digest.parser import build_prepared_context, parse_source
-from investor_digest.schemas import InvestorDigest, PreparedContext
+from investor_digest.llm_client import LocalOpenAIClient
+from investor_digest.parser import (
+    CORE_METRIC_SPECS,
+    _extract_item8_region,
+    _extract_ixbrl_profit_flow_totals,
+    _extract_ixbrl_revenue_composition,
+    _build_financial_snapshot,
+    _extract_period_from_text,
+    _format_metric_record,
+    _group_table_chunks,
+    _validate_metric_value,
+    build_prepared_context,
+    parse_source,
+)
+from investor_digest.schemas import InvestorDigest, MetricRecord, PreparedContext
 
 
 SYSTEM_PROMPT = """You are a financial education assistant.
@@ -60,6 +73,10 @@ def analyze_path(
             opening_excerpt_chars=opening_limit,
             section_excerpt_chars=section_limit,
             closing_excerpt_chars=closing_limit,
+        )
+        prepared = _maybe_enrich_prepared_with_llm_table_metrics(
+            prepared,
+            settings=settings,
         )
         try:
             use_modular_generation = uses_cloud_model or attempt < 3
@@ -132,7 +149,7 @@ def prepare_path(path: str, *, settings: Settings) -> PreparedContext:
     document = parse_source(path)
     resolved_model = _resolve_runtime_model_name(settings)
     model_scale = 1.0 if settings.uses_cloud_model else _context_scale_for_model(resolved_model)
-    return build_prepared_context(
+    prepared = build_prepared_context(
         document,
         max_chars=max(12000, int(settings.max_context_chars * model_scale)),
         opening_excerpt_chars=max(
@@ -143,6 +160,276 @@ def prepare_path(path: str, *, settings: Settings) -> PreparedContext:
             1600, int(settings.closing_excerpt_chars * max(0.6, model_scale))
         ),
     )
+    return _maybe_enrich_prepared_with_llm_table_metrics(prepared, settings=settings)
+
+
+def _maybe_enrich_prepared_with_llm_table_metrics(
+    prepared: PreparedContext,
+    *,
+    settings: Settings,
+) -> PreparedContext:
+    if not settings.uses_cloud_model:
+        return prepared
+
+    valid_metrics = {record.metric for record in prepared.metric_records if record.valid}
+    primary_metrics = {"revenue", "gross_profit", "operating_income", "net_income"}
+    important_metrics = primary_metrics | {
+        "operating_cash_flow",
+        "cash_and_equivalents",
+        "capital_expenditures",
+        "diluted_eps",
+    }
+    missing_primary = sorted(primary_metrics - valid_metrics)
+    missing_important = sorted(important_metrics - valid_metrics)
+    if not missing_primary and len(missing_important) <= 1:
+        return prepared
+
+    table_context = _build_llm_table_metric_context(prepared)
+    if not table_context:
+        return prepared
+
+    try:
+        fallback_payload = _extract_metrics_from_tables_with_llm(
+            settings=settings,
+            reporting_period=prepared.document.reporting_period,
+            missing_metrics=missing_important,
+            table_context=table_context,
+        )
+    except Exception:
+        return prepared
+
+    recovered_metrics = _merge_llm_metric_fallback(
+        prepared,
+        payload=fallback_payload,
+    )
+    if recovered_metrics:
+        prepared.warnings = [
+            *prepared.warnings,
+            f"Recovered missing financial metrics from full statement tables: {', '.join(recovered_metrics[:5])}.",
+        ]
+    return prepared
+
+
+def _build_llm_table_metric_context(prepared: PreparedContext) -> str:
+    if not prepared.table_chunks:
+        raw_item8_text, _ = _extract_item8_region(str(getattr(prepared.document, "text", "") or ""))
+        section_blocks: list[str] = []
+        if raw_item8_text:
+            section_blocks.append(
+                f"[SECTION] Item 8 Financial Statements\n{_trim_text(raw_item8_text, 12000)}"
+            )
+        item7_snippet = str(prepared.section_snippets.get("Item 7 MD&A") or "").strip()
+        if item7_snippet:
+            section_blocks.append(f"[SECTION] Item 7 MD&A\n{_trim_text(item7_snippet, 5000)}")
+        return "\n\n".join(section_blocks)
+
+    grouped = _group_table_chunks(prepared.table_chunks)
+    preferred_keywords = (
+        "summary results of operations",
+        "segment results of operations",
+        "statements of income",
+        "statements of operations",
+        "statements of earnings",
+        "balance sheets",
+        "cash flows",
+    )
+    selected_blocks: list[str] = []
+    seen: set[str] = set()
+    for keyword in preferred_keywords:
+        for table_name, payload in grouped.items():
+            if keyword not in table_name.lower() or table_name in seen:
+                continue
+            table_text = str(payload.get("text") or "").strip()
+            if not table_text:
+                continue
+            selected_blocks.append(
+                f"[TABLE] {table_name}\n{_trim_text(table_text, 4200)}"
+            )
+            seen.add(table_name)
+
+    if not selected_blocks:
+        for table_name, payload in list(grouped.items())[:4]:
+            table_text = str(payload.get("text") or "").strip()
+            if not table_text:
+                continue
+            selected_blocks.append(
+                f"[TABLE] {table_name}\n{_trim_text(table_text, 3200)}"
+            )
+
+    return "\n\n".join(selected_blocks[:6])
+
+
+def _extract_metrics_from_tables_with_llm(
+    *,
+    settings: Settings,
+    reporting_period: str,
+    missing_metrics: list[str],
+    table_context: str,
+) -> dict[str, object]:
+    client = LocalOpenAIClient(settings)
+    system_prompt = """You extract explicit financial statement values from pre-parsed 10-K financial modules.
+
+Rules:
+- Read only the provided financial tables or financial statement sections.
+- Extract only explicit numeric values that are directly shown in the provided material.
+- If a number is shown in a financial statement section but not in a clean table row, you may still extract it if the value is explicit.
+- Do not invent numbers.
+- Keep units faithful to the table and normalize to:
+  - USD_million for money amounts
+  - USD_per_share for EPS
+- If a metric is unavailable, return null values for it.
+- If segment revenue, cost of revenue, or operating expenses are explicitly shown, extract them for profit-flow charting.
+- Return JSON only.
+"""
+    user_prompt = f"""
+Reporting period: {reporting_period}
+
+Target metrics to recover if explicitly present:
+{json.dumps(missing_metrics, ensure_ascii=False)}
+
+Return JSON with this exact shape:
+{{
+  "metrics": {{
+    "revenue": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "gross_profit": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "operating_income": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "net_income": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "diluted_eps": {{"current_value": null, "previous_value": null, "unit": "USD_per_share", "source_table_name": "", "evidence_excerpt": ""}},
+    "operating_cash_flow": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "cash_and_equivalents": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "short_term_investments": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "total_debt": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}},
+    "capital_expenditures": {{"current_value": null, "previous_value": null, "unit": "USD_million", "source_table_name": "", "evidence_excerpt": ""}}
+  }},
+  "profit_flow": {{
+    "gross_profit": null,
+    "cost_of_revenue": null,
+    "operating_expenses": null,
+    "segments": [
+      {{"name": "", "revenue": null}}
+    ],
+    "source_label": "",
+    "evidence_excerpt": ""
+  }}
+}}
+
+Financial modules:
+{table_context}
+"""
+    return client.chat_json(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
+def _merge_llm_metric_fallback(
+    prepared: PreparedContext,
+    *,
+    payload: dict[str, object],
+) -> list[str]:
+    metrics_payload = payload.get("metrics") if isinstance(payload, dict) else None
+    if not isinstance(metrics_payload, dict):
+        return []
+
+    metric_index = {record.metric: index for index, record in enumerate(prepared.metric_records)}
+    recovered: list[str] = []
+    report_period = _extract_period_from_text(prepared.document.reporting_period) or prepared.document.reporting_period
+
+    for metric_name, spec in CORE_METRIC_SPECS.items():
+        candidate = metrics_payload.get(metric_name)
+        if not isinstance(candidate, dict):
+            continue
+
+        current_value = candidate.get("current_value")
+        if current_value is None:
+            continue
+
+        unit = str(candidate.get("unit") or spec.get("unit") or "")
+        numeric_value = _coerce_number(current_value)
+        validation_errors = _validate_metric_value(
+            metric=metric_name,
+            metric_type=str(spec["metric_type"]),
+            value=numeric_value,
+            unit=unit,
+        )
+        if validation_errors:
+            continue
+
+        previous_value = candidate.get("previous_value")
+        source_table_name = str(candidate.get("source_table_name") or "LLM table fallback").strip()
+        evidence_excerpt = _trim_text(str(candidate.get("evidence_excerpt") or ""), 240)
+        record = MetricRecord(
+            metric=metric_name,
+            metric_type=str(spec["metric_type"]),
+            value=numeric_value,
+            unit=unit,
+            period=str(report_period),
+            source=f"llm_table_fallback:{source_table_name}",
+            sources=[f"llm_table_fallback:{source_table_name}"],
+            canonical_source_chunk_id="",
+            canonical_source_table_name=source_table_name,
+            explanatory_chunk_ids=[],
+            canonical_numeric_source={
+                "chunk_id": "",
+                "table_name": source_table_name,
+                "source": f"llm_table_fallback:{source_table_name}",
+                "current_value": numeric_value,
+                "previous_value": _coerce_number(previous_value) if previous_value is not None else None,
+                "period": str(report_period),
+                "evidence": evidence_excerpt,
+            },
+            explanatory_sources=[],
+            confidence="medium",
+            valid=True,
+            validation_errors=[],
+            evidence=evidence_excerpt,
+        )
+
+        if metric_name in metric_index:
+            existing = prepared.metric_records[metric_index[metric_name]]
+            if existing.valid:
+                continue
+            prepared.metric_records[metric_index[metric_name]] = record
+        else:
+            prepared.metric_records.append(record)
+        recovered.append(metric_name)
+
+    if recovered:
+        prepared.financial_snapshot = _build_financial_snapshot(prepared.metric_records)
+        valid_records = [record for record in prepared.metric_records if record.valid]
+        prepared.financial_metric_map = {
+            record.metric: _format_metric_record(record)
+            for record in valid_records
+        }
+        prepared.financial_facts = [
+            _format_metric_record(record)
+            for record in valid_records
+        ][:16]
+
+    profit_flow = payload.get("profit_flow") if isinstance(payload, dict) else None
+    if isinstance(profit_flow, dict):
+        prepared.investor_summary_layer["llm_profit_flow"] = _normalize_llm_profit_flow(profit_flow)
+
+    return recovered
+
+
+def _normalize_llm_profit_flow(payload: dict[str, object]) -> dict[str, object]:
+    segments = payload.get("segments") if isinstance(payload.get("segments"), list) else []
+    normalized_segments: list[dict[str, object]] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        name = str(segment.get("name") or "").strip()
+        revenue = _coerce_number(segment.get("revenue"))
+        if not name or revenue <= 0:
+            continue
+        normalized_segments.append({"name": name, "revenue": revenue})
+
+    return {
+        "gross_profit": _coerce_number(payload.get("gross_profit")),
+        "cost_of_revenue": _coerce_number(payload.get("cost_of_revenue")),
+        "operating_expenses": _coerce_number(payload.get("operating_expenses")),
+        "segments": normalized_segments,
+        "source_label": str(payload.get("source_label") or "LLM financial module extraction").strip(),
+        "evidence_excerpt": _trim_text(str(payload.get("evidence_excerpt") or ""), 220),
+    }
 
 
 def _run_digest_generation(
@@ -1163,8 +1450,8 @@ def _normalize_payload(
     )
 
     normalized["chart_specs"] = _merge_chart_specs(
-        cleaned_charts,
         _build_programmatic_charts(prepared, language=language),
+        cleaned_charts,
         limit=3,
     )
     if _is_placeholder_list(normalized["risks"]) and prepared.key_risks:
@@ -1586,10 +1873,32 @@ def _build_profit_flow_sankey(
     net_income_value = _coerce_number(net_income_metric.get("value"))
 
     segment_flow = _extract_segment_income_breakdown(prepared)
+    if not segment_flow:
+        llm_profit_flow = prepared.investor_summary_layer.get("llm_profit_flow")
+        if isinstance(llm_profit_flow, dict):
+            segment_flow = llm_profit_flow
     segment_nodes = segment_flow.get("segments", []) if segment_flow else []
     cost_of_revenue_value = _coerce_number(segment_flow.get("cost_of_revenue")) if segment_flow else 0.0
     operating_expenses_value = _coerce_number(segment_flow.get("operating_expenses")) if segment_flow else 0.0
 
+    ixbrl_totals = _extract_ixbrl_profit_flow_totals(
+        prepared.document.selected_file,
+        prepared.document.reporting_period,
+    )
+    if ixbrl_totals:
+        if cost_of_revenue_value <= 0:
+            cost_of_revenue_value = _coerce_number(ixbrl_totals.get("cost_of_revenue"))
+        if operating_expenses_value <= 0:
+            direct_opex = _coerce_number(ixbrl_totals.get("operating_expenses"))
+            if direct_opex > 0:
+                operating_expenses_value = direct_opex
+            else:
+                total_costs = _coerce_number(ixbrl_totals.get("costs_and_expenses"))
+                if total_costs > 0 and cost_of_revenue_value > 0:
+                    operating_expenses_value = max(total_costs - cost_of_revenue_value, 0.0)
+
+    if gross_profit_value <= 0 and segment_flow:
+        gross_profit_value = _coerce_number(segment_flow.get("gross_profit"))
     if gross_profit_value <= 0 and revenue_value > 0:
         gross_profit_value = max(revenue_value - cost_of_revenue_value, 0.0)
     if cost_of_revenue_value <= 0 and revenue_value > 0 and gross_profit_value > 0:
@@ -1604,7 +1913,13 @@ def _build_profit_flow_sankey(
 
     below_operating_value = max(operating_income_value - net_income_value, 0.0)
 
-    if revenue_value <= 0 or gross_profit_value <= 0 or operating_income_value <= 0 or net_income_value <= 0:
+    if (
+        revenue_value <= 0
+        or gross_profit_value <= 0
+        or operating_income_value <= 0
+        or net_income_value <= 0
+        or len(segment_nodes) < 2
+    ):
         return None
 
     total_revenue_name = label("总收入", "Total revenue")
@@ -1613,7 +1928,7 @@ def _build_profit_flow_sankey(
     net_income_name = label("净利润", "Net income")
     cost_of_revenue_name = label("营业成本", "Cost of revenue")
     operating_expenses_name = label("营业费用", "Operating expenses")
-    below_operating_name = label("税项及其他", "Taxes and other")
+    below_operating_name = label("税项及其他调整", "Taxes and other adjustments")
 
     flow_nodes: list[dict[str, object]] = []
     flow_links: list[dict[str, object]] = []
@@ -1720,6 +2035,12 @@ def _build_profit_flow_sankey(
             ("revenue", "gross_profit", "operating_income", "net_income"),
         )
     )
+    if source_snippet:
+        source_snippet = (
+            f"{source_snippet} · 单位：百万美元"
+            if is_zh
+            else f"{source_snippet} · Unit: USD million"
+        )
 
     title = label("营收流向分析", "Revenue-to-profit flow")
     period = str(prepared.document.reporting_period or "").strip()
@@ -1746,9 +2067,17 @@ def _build_profit_flow_sankey(
 
 
 def _extract_segment_income_breakdown(prepared: PreparedContext) -> dict[str, object] | None:
+    snapshot = prepared.financial_snapshot if isinstance(prepared.financial_snapshot, dict) else {}
+    total_revenue = _coerce_number((snapshot.get("revenue") or {}).get("value"))
+    ixbrl_composition = _extract_ixbrl_revenue_composition(
+        prepared.document.selected_file,
+        prepared.document.reporting_period,
+        total_revenue,
+    )
+
     text = str(getattr(prepared.document, "text", "") or "")
     if not text:
-        return None
+        return ixbrl_composition
 
     lower_text = text.lower()
     anchor_markers = (
@@ -1761,7 +2090,7 @@ def _extract_segment_income_breakdown(prepared: PreparedContext) -> dict[str, ob
         if start >= 0:
             break
     if start < 0:
-        return None
+        return ixbrl_composition
 
     window = text[start : start + 6000]
     for marker in ("Reportable Segments", "Fiscal Year", "Revenue Recognition"):
@@ -1798,7 +2127,7 @@ def _extract_segment_income_breakdown(prepared: PreparedContext) -> dict[str, ob
             segments.append(record)
 
     if not segments and not totals:
-        return None
+        return ixbrl_composition
 
     if not totals and segments:
         totals = {
@@ -1809,7 +2138,7 @@ def _extract_segment_income_breakdown(prepared: PreparedContext) -> dict[str, ob
             "operating_income": sum(_coerce_number(entry.get("operating_income")) for entry in segments),
         }
 
-    return {
+    result = {
         "segments": segments,
         "revenue": _coerce_number(totals.get("revenue")),
         "cost_of_revenue": _coerce_number(totals.get("cost_of_revenue")),
@@ -1817,6 +2146,9 @@ def _extract_segment_income_breakdown(prepared: PreparedContext) -> dict[str, ob
         "operating_income": _coerce_number(totals.get("operating_income")),
         "source_label": _trim_text(window.splitlines()[0] if window else "SEGMENT RESULTS OF OPERATIONS", 120),
     }
+    if ixbrl_composition and len(result.get("segments") or []) < 2:
+        return ixbrl_composition
+    return result
 
 
 def _shorten_sankey_label(name: str) -> str:
