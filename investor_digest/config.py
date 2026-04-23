@@ -10,8 +10,11 @@ DEFAULT_LLM_MODEL = "auto"
 DEFAULT_LLM_PROVIDER = "local"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEFAULT_LLM_TIMEOUT_SECONDS = 420.0
 DEFAULT_LLM_TEMPERATURE = 0.1
+DEFAULT_LLM_MAX_OUTPUT_TOKENS = 3000
 DEFAULT_ANALYSIS_LANGUAGE = "zh-Hans"
 DEFAULT_ANALYSIS_AUDIENCE = "普通投资者"
 DEFAULT_MAX_CONTEXT_CHARS = 120000
@@ -30,12 +33,21 @@ class Settings:
     openai_project: str = ""
     llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS
     llm_temperature: float = DEFAULT_LLM_TEMPERATURE
+    llm_max_output_tokens: int = DEFAULT_LLM_MAX_OUTPUT_TOKENS
     analysis_language: str = DEFAULT_ANALYSIS_LANGUAGE
     analysis_audience: str = DEFAULT_ANALYSIS_AUDIENCE
     max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS
     section_excerpt_chars: int = DEFAULT_SECTION_EXCERPT_CHARS
     opening_excerpt_chars: int = DEFAULT_OPENING_EXCERPT_CHARS
     closing_excerpt_chars: int = DEFAULT_CLOSING_EXCERPT_CHARS
+
+    @property
+    def uses_cloud_model(self) -> bool:
+        return self.llm_provider in {"openai", "deepseek"}
+
+    @property
+    def prompt_profile(self) -> str:
+        return "cloud" if self.uses_cloud_model else "local"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,6 +59,12 @@ class Settings:
             llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
             llm_model = os.getenv("LLM_MODEL") or os.getenv(
                 "OPENAI_MODEL", DEFAULT_OPENAI_MODEL
+            )
+        elif provider == "deepseek":
+            llm_base_url = os.getenv("LLM_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL)
+            llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
+            llm_model = os.getenv("LLM_MODEL") or os.getenv(
+                "DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL
             )
         else:
             llm_base_url = os.getenv("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
@@ -65,6 +83,9 @@ class Settings:
             ),
             llm_temperature=float(
                 os.getenv("LLM_TEMPERATURE", str(DEFAULT_LLM_TEMPERATURE))
+            ),
+            llm_max_output_tokens=int(
+                os.getenv("LLM_MAX_OUTPUT_TOKENS", str(DEFAULT_LLM_MAX_OUTPUT_TOKENS))
             ),
             analysis_language=os.getenv("ANALYSIS_LANGUAGE", DEFAULT_ANALYSIS_LANGUAGE),
             analysis_audience=os.getenv("ANALYSIS_AUDIENCE", DEFAULT_ANALYSIS_AUDIENCE),

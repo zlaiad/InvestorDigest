@@ -22,6 +22,8 @@ class SankeyNode(BaseModel):
     name: str
     value: float | None = None
     item_style_color: str | None = None
+    depth: int | None = None
+    layout_order: int | None = None
 
 
 class SankeyLink(BaseModel):
@@ -44,6 +46,27 @@ class ChartSpec(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
 
 
+class FactSnapshotItem(BaseModel):
+    metric_key: str
+    label: str
+    value_text: str
+    yoy_text: str = ""
+    source_label: str = ""
+    source_snippet: str = ""
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+
+class EvidenceCard(BaseModel):
+    title: str
+    category: Literal["explanation", "risk", "accounting", "outlook"]
+    summary: str
+    source_label: str = ""
+    source_snippet: str = ""
+    related_metrics: list[str] = Field(default_factory=list)
+    importance: str = "medium"
+    why_it_matters: str = ""
+
+
 class InvestorDigest(BaseModel):
     company_name: str
     reporting_period: str
@@ -51,11 +74,14 @@ class InvestorDigest(BaseModel):
     audience: str
     one_sentence_takeaway: str
     overview_markdown: str
+    investor_view_markdown: str = ""
     key_points: list[str] = Field(default_factory=list)
     positives: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     watchlist: list[str] = Field(default_factory=list)
     glossary: list[GlossaryItem] = Field(default_factory=list)
+    fact_snapshot: list[FactSnapshotItem] = Field(default_factory=list)
+    evidence_cards: list[EvidenceCard] = Field(default_factory=list)
     chart_specs: list[ChartSpec] = Field(default_factory=list)
     risk_disclaimer: str
     warnings: list[str] = Field(default_factory=list)
@@ -127,6 +153,9 @@ class FilingChunk:
 class CompanyProfile:
     company_name: str
     reporting_period: str
+    business_summary: str = ""
+    monetization_summary: str = ""
+    segment_summary: str = ""
     segments: list[str] = field(default_factory=list)
     major_products: list[str] = field(default_factory=list)
     manufacturing_regions: list[str] = field(default_factory=list)

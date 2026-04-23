@@ -59,32 +59,14 @@ class LocalOpenAIClient:
         base_payload = {
             "model": self.resolve_model_name(),
             "temperature": self.settings.llm_temperature,
+            "max_tokens": self.settings.llm_max_output_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         }
 
-        candidates = [
-            {
-                **base_payload,
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "investor_digest_response",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": True,
-                        },
-                    },
-                },
-            },
-            {
-                **base_payload,
-                "response_format": {"type": "text"},
-            },
-            base_payload,
-        ]
+        candidates = _build_response_candidates(base_payload, self.settings.llm_provider)
 
         last_error: Exception | None = None
         for payload in candidates:
@@ -192,6 +174,44 @@ def _extract_json(text: str) -> dict[str, Any]:
     raise ValueError("Model response did not contain valid JSON")
 
 
+def _build_response_candidates(
+    base_payload: dict[str, Any], provider: str
+) -> list[dict[str, Any]]:
+    if provider == "deepseek":
+        return [
+            {
+                **base_payload,
+                "response_format": {"type": "json_object"},
+            },
+            {
+                **base_payload,
+                "response_format": {"type": "text"},
+            },
+            base_payload,
+        ]
+
+    return [
+        {
+            **base_payload,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "investor_digest_response",
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
+                },
+            },
+        },
+        {
+            **base_payload,
+            "response_format": {"type": "text"},
+        },
+        base_payload,
+    ]
+
+
 def _is_response_format_error(message: str) -> bool:
     lowered = message.lower()
     return "response_format" in lowered or "json_schema" in lowered
@@ -231,6 +251,8 @@ def _pick_default_model(models: list[str]) -> str:
 
 def _preferred_family_score(model: str) -> int:
     lowered = model.lower()
+    if "deepseek" in lowered:
+        return 4
     if "qwen" in lowered:
         return 3
     if "llama" in lowered:

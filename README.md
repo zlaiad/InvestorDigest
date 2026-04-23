@@ -2,11 +2,17 @@
 
 This project converts company filings into structured summaries and chart-ready outputs for a browser-based report view.
 
+Current demo scope:
+
+- Best suited for large-cap technology, platform, and hardware companies with relatively standard 10-K disclosures
+- Validated against Magnificent Seven style filings rather than all 10-K sectors
+- Not designed yet for sector-specific reporting frameworks such as banks, insurers, or REITs
+
 ## What this MVP does
 
 - Accepts a local `pdf`, `html`, `htm`, `txt`, or a directory containing SEC filing files
 - Extracts readable text and key filing sections
-- Sends a curated context window to a configured LLM endpoint
+- Sends a curated, high-signal summary bundle to a configured LLM endpoint
 - Returns:
   - plain-language summary
   - positives and risks
@@ -45,6 +51,14 @@ OpenAI API example:
 export LLM_PROVIDER=openai
 export OPENAI_API_KEY=your_api_key
 export OPENAI_MODEL=gpt-4.1-mini
+```
+
+DeepSeek API example:
+
+```bash
+export LLM_PROVIDER=deepseek
+export DEEPSEEK_API_KEY=your_api_key
+export DEEPSEEK_MODEL=deepseek-chat
 ```
 
 ## CLI

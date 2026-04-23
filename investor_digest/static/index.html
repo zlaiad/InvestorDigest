@@ -22,9 +22,9 @@
             把财报原文变成普通投资者能快速读懂的图文报告。先抽重点，再看风险，最后用图表理解业务结构。
           </p>
           <div class="hero-pills">
-            <span>本地模型</span>
+            <span>结构化抽取</span>
+            <span>证据追溯</span>
             <span>图表直出</span>
-            <span>面向散户表达</span>
           </div>
         </div>
         <div class="hero-note">
@@ -135,7 +135,7 @@
           <div id="empty-state" class="empty-state">
             <div class="empty-orb"></div>
             <h3>还没有报告</h3>
-            <p>生成后，这里会出现一句话结论、正文概览、风险提示和可视化图表。</p>
+            <p>生成后，这里会出现一句话结论、正文概览、主要风险、数据提醒和可视化图表。</p>
           </div>
 
           <article id="report-content" class="report-content hidden">
@@ -147,6 +147,22 @@
               </div>
               <h3 id="takeaway"></h3>
               <div id="overview" class="overview-copy"></div>
+            </section>
+
+            <section class="section-block">
+              <div class="section-heading">
+                <h3>投资者视角</h3>
+                <p>这部分只提供非个性化的观察性建议，不是买卖指令。</p>
+              </div>
+              <div id="investor-view" class="overview-copy"></div>
+            </section>
+
+            <section class="section-block">
+              <div class="section-heading">
+                <h3>事实层</h3>
+                <p>先看程序化抽取的关键数字，再看模型解读。</p>
+              </div>
+              <div id="fact-grid" class="fact-grid"></div>
             </section>
 
             <section class="grid grid-kpis">
@@ -176,6 +192,14 @@
               <div id="charts-grid" class="charts-grid"></div>
             </section>
 
+            <section class="section-block">
+              <div class="section-heading">
+                <h3>证据与依据</h3>
+                <p>重点判断和主要风险都保留来源线索，便于回看原文。</p>
+              </div>
+              <div id="evidence-grid" class="evidence-grid"></div>
+            </section>
+
             <section class="grid two-up">
               <div class="panel-surface">
                 <div class="section-heading compact">
@@ -186,8 +210,8 @@
               </div>
               <div class="panel-surface">
                 <div class="section-heading compact">
-                  <h3>风险提醒</h3>
-                  <p>模型不确定、上下文被截断，都会在这里标出来。</p>
+                  <h3>数据与解读提醒</h3>
+                  <p>这里只显示数据覆盖不足、可比性或解读边界，不重复展示经营风险。</p>
                 </div>
                 <ul id="warnings" class="warning-list"></ul>
                 <div id="disclaimer" class="disclaimer-box"></div>

@@ -12,7 +12,7 @@ from investor_digest.pipeline import analyze_path, prepare_path
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Investor Digest local pipeline")
+    parser = argparse.ArgumentParser(description="Investor Digest analysis pipeline")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prepare_cmd = subparsers.add_parser(
@@ -21,13 +21,13 @@ def main() -> int:
     prepare_cmd.add_argument("--path", required=True, help="Path to file or filing folder")
 
     analyze_cmd = subparsers.add_parser(
-        "analyze-path", help="Analyze a filing through the local model runtime"
+        "analyze-path", help="Analyze a filing through the configured model provider"
     )
     analyze_cmd.add_argument("--path", required=True, help="Path to file or filing folder")
     analyze_cmd.add_argument("--audience", help="Audience override")
     analyze_cmd.add_argument("--language", help="Language override, default zh-Hans")
 
-    serve_cmd = subparsers.add_parser("serve", help="Run the local API")
+    serve_cmd = subparsers.add_parser("serve", help="Run the local API service")
     serve_cmd.add_argument("--host", default="127.0.0.1")
     serve_cmd.add_argument("--port", type=int, default=8008)
 

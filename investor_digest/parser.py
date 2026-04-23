@@ -25,7 +25,7 @@ SEC_CANDIDATE_NAMES = (
 )
 
 SECTION_PATTERNS = (
-    ("Item 1 Business", re.compile(r"\bitem\s+1\.?\s+business\b", re.IGNORECASE)),
+    ("Item 1 Business", re.compile(r"\bitem\s+1\.?\s+business(?:\b|(?=[A-Z]))", re.IGNORECASE)),
     (
         "Item 1A Risk Factors",
         re.compile(r"\bitem\s+1a\.?\s+risk factors\b", re.IGNORECASE),
@@ -46,7 +46,7 @@ SECTION_PATTERNS = (
     ),
     (
         "Item 8 Financial Statements",
-        re.compile(r"\bitem\s+8\.?\s+financial statements\b", re.IGNORECASE),
+        re.compile(r"\bitem\s+8\.?\s+financial statements(?:\b|(?=[A-Z]))", re.IGNORECASE),
     ),
 )
 
@@ -135,17 +135,20 @@ FINANCIAL_FACT_PATTERNS = (
 )
 
 ITEM7_SUBTOPICS = (
-    ("overview", ("overview", "highlights", "mission", "focused on profitable growth")),
+    ("overview", ("overview", "highlights", "mission", "strategy", "business model")),
     ("financial_summary", ("revenue", "gross profit", "operating income", "net income", "margin")),
-    ("production", ("produced", "deliver", "factory", "vehicle production", "gigafactory")),
-    ("demand", ("demand", "orders", "pricing", "affordable", "market penetration")),
+    ("operations", ("operations", "production", "capacity", "deployment", "manufacturing", "supply chain")),
+    ("demand", ("demand", "orders", "pricing", "market", "customers")),
     ("cashflow_capex", ("cash flow", "capital expenditures", "capex", "liquidity", "cash and cash equivalents")),
-    ("outlook", ("expect", "we plan", "outlook", "future", "robotaxi", "cybercab", "autonomous")),
+    ("outlook", ("expect", "we plan", "outlook", "future", "guidance", "roadmap")),
 )
 
 TABLE_HEADING_PATTERNS = (
     re.compile(r"consolidated balance sheets", re.IGNORECASE),
+    re.compile(r"consolidated statements of income", re.IGNORECASE),
     re.compile(r"consolidated statements of operations", re.IGNORECASE),
+    re.compile(r"consolidated statements of earnings", re.IGNORECASE),
+    re.compile(r"consolidated statements of income and comprehensive income", re.IGNORECASE),
     re.compile(r"consolidated statements of cash flows", re.IGNORECASE),
     re.compile(r"consolidated statements of comprehensive income", re.IGNORECASE),
     re.compile(
@@ -158,12 +161,18 @@ TABLE_HEADING_PATTERNS = (
     re.compile(r"net sales by category", re.IGNORECASE),
 )
 
+FALLBACK_TABLE_HEADING_PATTERNS = (
+    re.compile(r"summary results of operations", re.IGNORECASE),
+    re.compile(r"segment results of operations", re.IGNORECASE),
+    re.compile(r"cash flows?\s+s?\s*tatements?", re.IGNORECASE),
+)
+
 NOTE_HEADING_INLINE = re.compile(
     r"(?mi)^Note\s+(\d+[A-Z]?)\s*[–\-.:,]?\s*(.+)?$"
 )
 
 TABLE_METRIC_PATTERNS = {
-    "revenue": re.compile(r"total revenues?\s+\$?\s*\(?([\d,]+(?:\.\d+)?)\)?", re.IGNORECASE),
+    "revenue": re.compile(r"(?:total\s+)?revenues?\s+\$?\s*\(?([\d,]+(?:\.\d+)?)\)?", re.IGNORECASE),
     "gross_profit": re.compile(r"gross profit\s+\$?\s*\(?([\d,]+(?:\.\d+)?)\)?", re.IGNORECASE),
     "operating_income": re.compile(
         r"(?:income from operations|operating income)\s+\$?\s*\(?([\d,]+(?:\.\d+)?)\)?",
@@ -231,31 +240,38 @@ CORE_METRIC_SPECS = {
 
 COMPANY_PROFILE_RULES = {
     "segments": (
-        ("automotive", ("automotive", "vehicle")),
-        ("energy generation and storage", ("energy generation and storage", "energy storage", "megapack", "powerwall")),
-        ("services and other", ("services and other", "services")),
+        ("Data Center", ("data center",)),
+        ("Gaming", ("gaming",)),
+        ("Professional Visualization", ("professional visualization",)),
+        ("Automotive and Robotics", ("automotive and robotics",)),
+        ("Automotive", ("automotive",)),
+        ("Energy Generation and Storage", ("energy generation and storage",)),
+        ("Services and Other", ("services and other",)),
     ),
     "major_products": (
-        ("Model 3", ("model 3",)),
-        ("Model Y", ("model y",)),
-        ("Model S", ("model s",)),
-        ("Model X", ("model x",)),
-        ("Cybertruck", ("cybertruck",)),
-        ("Megapack", ("megapack",)),
-        ("Powerwall", ("powerwall",)),
-        ("Solar Roof", ("solar roof",)),
+        ("GPUs", ("gpu", "gpus", "graphics processing unit")),
+        ("CPUs", ("cpu", "cpus")),
+        ("Networking Products", ("networking", "ethernet", "infiniband", "interconnect")),
+        ("AI Platforms", ("cuda", "accelerated computing", "ai platform", "ai systems")),
+        ("Software Platforms", ("software platform", "sdk", "api", "library")),
+        ("Vehicles", ("vehicle", "vehicles", "electric vehicle", "ev")),
+        ("Energy Storage", ("energy storage", "battery storage", "megapack", "powerwall")),
     ),
     "manufacturing_regions": (
-        ("United States", ("united states", "texas", "fremont", "nevada", "new york")),
+        ("United States", ("united states", "u.s.", "usa", "california", "texas", "new york")),
         ("China", ("china", "shanghai")),
-        ("Germany", ("germany", "berlin")),
+        ("Taiwan", ("taiwan",)),
+        ("Europe", ("europe", "germany", "berlin", "france", "ireland", "united kingdom")),
         ("Mexico", ("mexico",)),
     ),
     "strategic_themes": (
-        ("AI and autonomy", ("ai", "autonomy", "autonomous", "fsd", "robotaxi", "cybercab")),
-        ("Cost reduction", ("cost reduction", "affordability", "lower cost", "pricing")),
-        ("Energy storage growth", ("energy storage", "megapack", "powerwall")),
-        ("Manufacturing scale-up", ("production ramp", "ramp", "factory", "gigafactory")),
+        ("AI and accelerated computing", ("ai", "artificial intelligence", "accelerated computing", "inference", "training")),
+        ("Platform software and ecosystem", ("software", "sdk", "api", "developer", "platform")),
+        ("Data center expansion", ("data center", "cloud", "hyperscale")),
+        ("Product and technology roadmap", ("next-generation", "roadmap", "architecture", "new product")),
+        ("Operations and supply chain", ("operations", "capacity", "supply chain", "manufacturing")),
+        ("Autonomous and robotics", ("autonomous", "robotics")),
+        ("Energy transition", ("energy storage", "battery", "renewable")),
     ),
 }
 
@@ -272,12 +288,12 @@ EXPLANATION_TOPIC_RULES = (
 )
 
 RISK_RULES = (
-    ("production ramp risk", ("production", "ramp", "manufacturing"), ["revenue", "margin"]),
-    ("supplier dependency risk", ("supplier", "component", "single source"), ["revenue", "margin"]),
-    ("battery raw materials risk", ("battery", "lithium", "raw material"), ["margin"]),
-    ("EV demand cyclicality", ("interest rates", "consumer spending", "demand", "pricing pressure", "cyclicality"), ["revenue", "margin"]),
+    ("execution and scaling risk", ("execution", "ramp", "capacity", "deployment", "manufacturing"), ["revenue", "margin"]),
+    ("supplier and concentration risk", ("supplier", "component", "single source", "concentration"), ["revenue", "margin"]),
+    ("demand and pricing risk", ("demand", "pricing", "consumer spending", "cyclicality", "inventory"), ["revenue", "margin"]),
     ("competition risk", ("competition", "competitive", "price reductions"), ["revenue", "margin"]),
-    ("policy or tariff risk", ("tariff", "regulation", "policy", "incentive"), ["revenue", "margin"]),
+    ("regulatory and geopolitical risk", ("tariff", "regulation", "policy", "export control", "geopolitical"), ["revenue", "margin"]),
+    ("technology transition risk", ("next-generation", "product transition", "roadmap", "architecture"), ["revenue", "margin"]),
 )
 
 ACCOUNTING_FLAG_RULES = (
@@ -324,12 +340,12 @@ EXPLANATION_SIGNAL_KEYWORDS = (
 )
 
 RISK_SUMMARY_TEMPLATES = {
-    "production ramp risk": "New product and factory ramps can slip or cost more than planned, which can delay volume growth and pressure margins.",
-    "supplier dependency risk": "Tesla relies on a broad supplier base and some concentrated components; shortages or weaker purchasing terms can disrupt production and raise costs.",
-    "battery raw materials risk": "Battery cell availability and raw material pricing can constrain production and put pressure on gross margin.",
-    "EV demand cyclicality": "EV demand is sensitive to interest rates, consumer spending, pricing pressure, and auto-cycle swings, which can hurt both revenue and margin.",
-    "competition risk": "Competition from EV and conventional automakers can force price cuts or higher selling costs, weighing on revenue growth and profitability.",
-    "policy or tariff risk": "Changes in tariffs, incentives, or regulation can affect pricing, demand, production economics, and the competitive landscape.",
+    "execution and scaling risk": "Execution problems in scaling operations, deployment, or capacity can delay growth and pressure margins.",
+    "supplier and concentration risk": "Dependence on key suppliers, concentrated components, or large counterparties can disrupt operations and raise costs.",
+    "demand and pricing risk": "Demand softness, pricing pressure, or inventory adjustments can weigh on revenue growth and profitability.",
+    "competition risk": "Competitive pressure can reduce pricing power, raise selling costs, or slow market share gains.",
+    "regulatory and geopolitical risk": "Regulation, export controls, tariffs, or geopolitical changes can affect demand, supply continuity, and costs.",
+    "technology transition risk": "Product or architecture transitions can create execution risk if timing, adoption, or performance does not meet expectations.",
 }
 
 
@@ -748,6 +764,48 @@ def _build_metric_records(
             )
             continue
 
+        narrative_hit = _extract_metric_from_narrative_chunks(
+            metric_name=metric_name,
+            narrative_chunks=narrative_chunks,
+            reporting_period=reporting_period,
+        )
+        if narrative_hit:
+            validation_errors = _validate_metric_value(
+                metric=metric_name,
+                metric_type=str(spec["metric_type"]),
+                value=narrative_hit["value"],
+                unit=str(narrative_hit["unit"]),
+            )
+            records.append(
+                MetricRecord(
+                    metric=metric_name,
+                    metric_type=str(spec["metric_type"]),
+                    value=narrative_hit["value"],
+                    unit=str(narrative_hit["unit"]),
+                    period=str(narrative_hit["period"]),
+                    source=str(narrative_hit["source"]),
+                    sources=[str(narrative_hit["source"])],
+                    canonical_source_chunk_id=str(narrative_hit.get("chunk_id", "")),
+                    canonical_source_table_name=str(narrative_hit.get("table_name", "")),
+                    explanatory_chunk_ids=[],
+                    canonical_numeric_source={
+                        "chunk_id": str(narrative_hit.get("chunk_id", "")),
+                        "table_name": str(narrative_hit.get("table_name", "")),
+                        "source": str(narrative_hit["source"]),
+                        "current_value": narrative_hit.get("current_value"),
+                        "previous_value": narrative_hit.get("previous_value"),
+                        "period": str(narrative_hit.get("period", "")),
+                        "evidence": str(narrative_hit["evidence"]),
+                    },
+                    explanatory_sources=[],
+                    confidence="low" if validation_errors else "medium",
+                    valid=not validation_errors,
+                    validation_errors=validation_errors,
+                    evidence=str(narrative_hit["evidence"]),
+                )
+            )
+            continue
+
         missing_error = "missing structured table value"
         canonical_numeric_source: dict[str, object] = {}
         evidence = "Not found in structured financial statements."
@@ -837,20 +895,64 @@ def _build_narrative_chunks(section_snippets: dict[str, str]) -> list[FilingChun
 
 def _build_table_chunks(text: str) -> list[FilingChunk]:
     search_space, region_start = _extract_item8_region(text)
-    if not search_space:
-        return []
     chunks: list[FilingChunk] = []
+    if search_space:
+        chunks.extend(
+            _collect_table_chunks_from_search_space(
+                search_space=search_space,
+                region_start=region_start,
+                patterns=TABLE_HEADING_PATTERNS,
+                section_name="Item 8 Financial Statements",
+                item_number="Item 8",
+                prefix="table",
+            )
+        )
 
-    for pattern in TABLE_HEADING_PATTERNS:
+    # Some large-cap tech filings expose the key summary tables more reliably in Item 7
+    # than in HTML-rendered Item 8 tables. Use them as a structured fallback source.
+    fallback_chunks = _collect_table_chunks_from_search_space(
+        search_space=text,
+        region_start=0,
+        patterns=FALLBACK_TABLE_HEADING_PATTERNS,
+        section_name="Item 7 MD&A",
+        item_number="Item 7",
+        prefix="mdna_table",
+    )
+    chunks.extend(
+        chunk
+        for chunk in fallback_chunks
+        if chunk.metadata.get("table_title") not in {
+            existing.metadata.get("table_title") for existing in chunks
+        }
+    )
+    return chunks
+
+
+def _collect_table_chunks_from_search_space(
+    *,
+    search_space: str,
+    region_start: int,
+    patterns: tuple[re.Pattern[str], ...],
+    section_name: str,
+    item_number: str,
+    prefix: str,
+) -> list[FilingChunk]:
+    chunks: list[FilingChunk] = []
+    for pattern in patterns:
         if "notes to consolidated financial statements" in pattern.pattern.lower():
             continue
         matches = [
             match
             for match in pattern.finditer(search_space)
             if _is_heading_like_match(search_space, match.start())
+            and not _looks_like_toc_excerpt(search_space[match.start() : match.start() + 900])
         ]
         if not matches:
-            matches = list(pattern.finditer(search_space))
+            matches = [
+                match
+                for match in pattern.finditer(search_space)
+                if not _looks_like_toc_excerpt(search_space[match.start() : match.start() + 900])
+            ]
         if not matches:
             continue
 
@@ -865,23 +967,28 @@ def _build_table_chunks(text: str) -> list[FilingChunk]:
                 candidate_pool = later_matches
 
         start = candidate_pool[0].start()
-        end = _find_next_table_boundary(search_space, start + 1)
+        end = _find_next_table_boundary(search_space, start + 1, patterns=patterns)
         excerpt = _clean_chunk_text(search_space[start:end])
         if len(excerpt) < 120:
             continue
+        if _looks_like_toc_excerpt(excerpt[:700]):
+            continue
+        lowered_excerpt = excerpt[:1200].lower()
+        if "we have audited the accompanying" in lowered_excerpt or "in our opinion" in lowered_excerpt:
+            continue
         table_title = _first_line(excerpt)
         table_groups = _split_table_into_groups(excerpt)
-        parent_chunk_id = _make_chunk_id(f"Item 8 Financial Statements {table_title}", 0, prefix="table_parent")
+        parent_chunk_id = _make_chunk_id(f"{section_name} {table_title}", 0, prefix=f"{prefix}_parent")
         for group_index, group_text in enumerate(table_groups):
-            chunk_id = _make_chunk_id("Item 8 Financial Statements", len(chunks), prefix="table")
+            chunk_id = _make_chunk_id(section_name, len(chunks), prefix=prefix)
             chunks.append(
                 FilingChunk(
                     chunk_id=chunk_id,
                     chunk_type="table_chunk",
-                    section_path=f"Item 8 Financial Statements/{table_title}",
+                    section_path=f"{section_name}/{table_title}",
                     order=len(chunks),
                     text=group_text,
-                    item_number="Item 8",
+                    item_number=item_number,
                     subsection_title=table_title,
                     token_count=_estimate_token_count(group_text),
                     importance_score=0.95,
@@ -905,7 +1012,6 @@ def _build_table_chunks(text: str) -> list[FilingChunk]:
                     },
                 )
             )
-
     return chunks
 
 
@@ -986,15 +1092,10 @@ def _find_section_matches(text: str) -> list[tuple[str, int]]:
             ]
             if later_candidates:
                 candidate_pool = later_candidates
-        preferred = next(
-            (
-                match
-                for match in candidate_pool
-                if not _looks_like_toc_excerpt(text[match.start() : match.start() + 700])
-            ),
-            None,
+        chosen = max(
+            candidate_pool,
+            key=lambda match: _section_match_score(text, match.start()),
         )
-        chosen = preferred or candidate_pool[0]
         matches.append((name, chosen.start()))
 
     return matches
@@ -1013,7 +1114,10 @@ def _extract_item8_region(text: str) -> tuple[str, int]:
         (start for name, start in section_matches if start > item8_start),
         len(text),
     )
-    return text[item8_start:next_item_start], item8_start
+    region = text[item8_start:next_item_start]
+    if _looks_like_toc_excerpt(region[:1200]):
+        return "", 0
+    return region, item8_start
 
 
 def _find_note_heading_matches(note_space: str) -> list[tuple[str, str, int]]:
@@ -1269,9 +1373,14 @@ def _make_chunk_id(section_name: str, index: int, *, prefix: str = "chunk") -> s
     return f"{prefix}_{slug}_{index + 1:02d}"
 
 
-def _find_next_table_boundary(text: str, start: int) -> int:
+def _find_next_table_boundary(
+    text: str,
+    start: int,
+    *,
+    patterns: tuple[re.Pattern[str], ...] | None = None,
+) -> int:
     next_positions: list[int] = []
-    for pattern in TABLE_HEADING_PATTERNS:
+    for pattern in patterns or TABLE_HEADING_PATTERNS:
         match = pattern.search(text, start)
         if match:
             next_positions.append(match.start())
@@ -1320,6 +1429,50 @@ def _extract_metric_values_from_table_chunks(
                 "table_name": str(representative.metadata.get("table_title") or representative.subsection_title),
                 "evidence": evidence,
             }
+
+    income_payload = (
+        _find_table_payload(table_groups, "statements of income")
+        or _find_table_payload(table_groups, "statements of operations")
+        or _find_table_payload(table_groups, "statements of earnings")
+        or _find_table_payload(table_groups, "summary results of operations")
+    )
+    if income_payload:
+        income_text = str(income_payload["text"])
+        income_chunk = income_payload["chunk"]
+        income_years = income_chunk.metadata.get("fiscal_year_columns") or []
+        income_rows = {
+            "revenue": (
+                r"^revenue$",
+                r"^revenues$",
+                r"^total revenue$",
+                r"^total revenues$",
+            ),
+            "gross_profit": (r"^gross profit$", r"^gross margin$"),
+            "operating_income": (
+                r"^income from operations$",
+                r"^operating income$",
+            ),
+            "net_income": (
+                r"^net income$",
+                r"^net income attributable to .*",
+            ),
+            "diluted_eps": (
+                r"^diluted earnings per share$",
+                r"^diluted earnings per share of common stock$",
+                r"^diluted eps$",
+            ),
+        }
+        for metric_name, label_patterns in income_rows.items():
+            row_hit = _extract_row_series_by_labels(income_text, label_patterns)
+            if not row_hit:
+                continue
+            extracted[metric_name] = _build_metric_entry_from_row_hit(
+                metric_name=metric_name,
+                row_hit=row_hit,
+                representative=income_chunk,
+                fiscal_years=income_years,
+                fallback_period=report_year,
+            )
 
     balance_payload = _find_table_payload(table_groups, "balance sheets")
     if balance_payload:
@@ -1373,6 +1526,33 @@ def _extract_metric_values_from_table_chunks(
                     f"{current_debt_row['row_text']}\n{noncurrent_debt_row['row_text']}"
                 ),
             }
+
+    cash_flow_payload = (
+        _find_table_payload(table_groups, "statements of cash flows")
+        or _find_table_payload(table_groups, "cash flows statements")
+        or _find_table_payload(table_groups, "cash flows")
+    )
+    if cash_flow_payload:
+        cash_flow_text = str(cash_flow_payload["text"])
+        cash_flow_chunk = cash_flow_payload["chunk"]
+        cash_flow_years = cash_flow_chunk.metadata.get("fiscal_year_columns") or []
+        for metric_name, label_patterns in {
+            "operating_cash_flow": (
+                r"^net cash from operations$",
+                r"^net cash from operating activities$",
+                r"^net cash provided by operations$",
+                r"^net cash provided by operating activities$",
+            ),
+        }.items():
+            row_hit = _extract_row_series_by_labels(cash_flow_text, label_patterns)
+            if row_hit:
+                extracted[metric_name] = _build_metric_entry_from_row_hit(
+                    metric_name=metric_name,
+                    row_hit=row_hit,
+                    representative=cash_flow_chunk,
+                    fiscal_years=cash_flow_years,
+                    fallback_period=report_year,
+                )
 
     if "gross_profit" in extracted and "revenue" in extracted and "gross_margin" not in extracted:
         revenue = float(extracted["revenue"]["value"] or 0)
@@ -1535,6 +1715,99 @@ def _build_metric_entry_from_row_hit(
         "table_name": str(representative.metadata.get("table_title") or representative.subsection_title),
         "evidence": _smart_trim(str(row_hit["row_text"]), 280),
     }
+
+
+def _extract_metric_from_narrative_chunks(
+    *,
+    metric_name: str,
+    narrative_chunks: list[FilingChunk],
+    reporting_period: str,
+) -> dict[str, object] | None:
+    if metric_name == "operating_cash_flow":
+        return _extract_operating_cash_flow_from_narrative(narrative_chunks, reporting_period)
+    if metric_name == "cash_and_equivalents":
+        return _extract_liquidity_total_from_narrative(narrative_chunks, reporting_period)
+    return None
+
+
+def _extract_operating_cash_flow_from_narrative(
+    narrative_chunks: list[FilingChunk],
+    reporting_period: str,
+) -> dict[str, object] | None:
+    patterns = (
+        re.compile(
+            r"cash from operations increased .*? to \$\s*([\d.]+)\s*billion .*? fiscal year 20(\d{2})",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"net cash from operations\s+([\d,]+)",
+            re.IGNORECASE,
+        ),
+    )
+    for chunk in narrative_chunks:
+        if not chunk.section_path.startswith("Item 7 MD&A"):
+            continue
+        normalized = re.sub(r"\s+", " ", chunk.text).strip()
+        for pattern in patterns:
+            match = pattern.search(normalized)
+            if not match:
+                continue
+            if "billion" in pattern.pattern:
+                current_value = float(match.group(1)) * 1000
+                current_year = f"20{match.group(2)}"
+                previous_match = re.search(
+                    r"increased \$\s*([\d.]+)\s*billion to \$\s*([\d.]+)\s*billion",
+                    normalized,
+                    re.IGNORECASE,
+                )
+                previous_value = None
+                if previous_match:
+                    previous_value = round((float(previous_match.group(2)) - float(previous_match.group(1))) * 1000, 3)
+            else:
+                current_value = _parse_table_number(match.group(1))
+                current_year = _extract_period_from_text(reporting_period) or reporting_period
+                previous_value = None
+            return {
+                "value": current_value,
+                "current_value": current_value,
+                "previous_value": previous_value,
+                "unit": "USD_million",
+                "period": current_year,
+                "source": chunk.section_path,
+                "chunk_id": chunk.chunk_id,
+                "table_name": "Narrative cash flow disclosure",
+                "evidence": _smart_trim(normalized, 280),
+            }
+    return None
+
+
+def _extract_liquidity_total_from_narrative(
+    narrative_chunks: list[FilingChunk],
+    reporting_period: str,
+) -> dict[str, object] | None:
+    pattern = re.compile(
+        r"cash, cash equivalents, and short-term investments totaled \$\s*([\d.]+)\s*billion and \$\s*([\d.]+)\s*billion",
+        re.IGNORECASE,
+    )
+    for chunk in narrative_chunks:
+        if "cash, cash equivalents, and short-term investments" not in chunk.text.lower():
+            continue
+        normalized = re.sub(r"\s+", " ", chunk.text).strip()
+        match = pattern.search(normalized)
+        if not match:
+            continue
+        return {
+            "value": float(match.group(1)) * 1000,
+            "current_value": float(match.group(1)) * 1000,
+            "previous_value": float(match.group(2)) * 1000,
+            "unit": "USD_million",
+            "period": _extract_period_from_text(reporting_period) or reporting_period,
+            "source": chunk.section_path,
+            "chunk_id": chunk.chunk_id,
+            "table_name": "Narrative liquidity disclosure",
+            "evidence": _smart_trim(normalized, 280),
+        }
+    return None
 
 
 def _strip_repeated_table_header(text: str, *, first: bool) -> str:
@@ -1715,27 +1988,185 @@ def _extract_year_int(text: str) -> int | None:
     return int(year) if year else None
 
 
+def _extract_business_summary(text: str, max_chars: int = 420) -> str:
+    if not text:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    content_lines = [
+        line
+        for line in lines
+        if not re.match(r"^item\s+1\b", line, re.IGNORECASE)
+        and line.lower() not in {"our company", "overview"}
+        and not _looks_like_toc_line(line)
+        and "table of contents" not in line.lower()
+    ]
+    joined = " ".join(content_lines).strip()
+    if not joined:
+        return ""
+    summary = joined
+    if summary.upper().startswith("GENERAL "):
+        summary = summary[8:].strip()
+    first_sentence_break = re.search(r"(?<=[.!?])\s+", summary)
+    if first_sentence_break:
+        first_part = summary[: first_sentence_break.end()].strip()
+        second_part = summary[first_sentence_break.end() :].strip()
+        summary = first_part
+        if second_part:
+            summary = f"{summary} {second_part}"
+    if not summary:
+        return ""
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 3].rstrip() + "..."
+
+
+def _extract_focus_sentences(text: str, *, keywords: tuple[str, ...], max_chars: int = 420) -> str:
+    if not text:
+        return ""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", normalized)
+    selected: list[str] = []
+    for sentence in sentences:
+        lowered = sentence.lower()
+        if "table of contents" in lowered:
+            continue
+        if _looks_like_toc_line(sentence):
+            continue
+        if any(keyword in lowered for keyword in keywords):
+            selected.append(sentence.strip())
+        if len(" ".join(selected)) >= max_chars:
+            break
+    if not selected:
+        return ""
+    summary = " ".join(selected).strip()
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 3].rstrip() + "..."
+
+
+def _extract_segment_summary(text: str, max_chars: int = 700) -> str:
+    if not text:
+        return ""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", normalized) if sentence.strip()]
+    priority_groups = (
+        (
+            "we operate our business and report our financial performance using",
+            "we report financial results for",
+            "reportable segments",
+            "segments:",
+        ),
+        (
+            "generate substantially all of our revenue",
+            "advertising placements",
+            "commercial cloud",
+            "products and cloud services",
+            "family of apps",
+            "reality labs",
+        ),
+        ("costs and expenses were recognized", "operate at a loss"),
+    )
+    selected: list[str] = []
+    for group in priority_groups:
+        for sentence in sentences:
+            lowered = sentence.lower()
+            if "table of contents" in lowered:
+                continue
+            if _looks_like_toc_line(sentence):
+                continue
+            if any(keyword in lowered for keyword in group) and sentence not in selected:
+                selected.append(sentence)
+                break
+    if not selected:
+        return ""
+    summary = " ".join(selected).strip()
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 3].rstrip() + "..."
+
+
 def _build_company_profile(
     *,
     document: ParsedDocument,
     section_snippets: dict[str, str],
 ) -> CompanyProfile:
     business_text = section_snippets.get("Item 1 Business", "")
+    mdna_text = section_snippets.get("Item 7 MD&A", "")
     lowered = business_text.lower()
+    business_summary = _extract_business_summary(business_text)
+    monetization_summary = _extract_focus_sentences(
+        "\n".join([business_text, mdna_text]),
+        keywords=(
+            "generate substantially all of our revenue",
+            "generate revenue from",
+            "generate revenue by",
+            "revenue increased",
+            "products and cloud services",
+            "commercial cloud",
+            "subscription revenue",
+            "search and news advertising",
+            "office commercial",
+            "azure",
+            "selling advertising placements",
+            "subscription revenue",
+            "license revenue",
+            "services revenue",
+            "advertising revenue",
+            "family of apps",
+            "reality labs",
+        ),
+        max_chars=420,
+    )
+    segment_summary = _extract_segment_summary("\n".join([business_text, mdna_text]), max_chars=700)
+    if not segment_summary:
+        normalized_document_text = re.sub(r"\s+", " ", document.text)
+        explicit_segment_match = re.search(
+            r"We operate our business and report our financial performance using three segments: .*?More Personal Computing\.",
+            normalized_document_text,
+            re.IGNORECASE,
+        )
+        if explicit_segment_match:
+            segment_summary = explicit_segment_match.group(0).strip()
+    if not segment_summary:
+        segment_summary = _extract_focus_sentences(
+            document.text,
+            keywords=(
+                "we operate our business and report our financial performance using three segments",
+                "productivity and business processes",
+                "intelligent cloud",
+                "more personal computing",
+                "family of apps",
+                "reality labs",
+            ),
+            max_chars=520,
+        )
     fields: dict[str, list[str]] = {}
     for field_name, options in COMPANY_PROFILE_RULES.items():
         values: list[str] = []
         for label, keywords in options:
-            if any(keyword in lowered for keyword in keywords):
+            hit_count = sum(1 for keyword in keywords if keyword in lowered)
+            min_hits = 1
+            if field_name == "segments":
+                min_hits = 2
+            if field_name == "major_products":
+                min_hits = 2
+            elif field_name == "manufacturing_regions":
+                min_hits = 2
+            if hit_count >= min_hits:
                 values.append(label)
         fields[field_name] = values[:12]
     return CompanyProfile(
         company_name=document.company_name,
         reporting_period=document.reporting_period,
+        business_summary=business_summary,
+        monetization_summary=monetization_summary,
+        segment_summary=segment_summary,
         segments=fields.get("segments", [])[:4],
-        major_products=fields.get("major_products", [])[:8],
-        manufacturing_regions=fields.get("manufacturing_regions", [])[:6],
-        strategic_themes=fields.get("strategic_themes", [])[:6],
+        major_products=fields.get("major_products", [])[:6],
+        manufacturing_regions=fields.get("manufacturing_regions", [])[:4],
+        strategic_themes=fields.get("strategic_themes", [])[:5],
     )
 
 
@@ -1761,6 +2192,8 @@ def _build_financial_snapshot(
             "metric_name": metric_name,
             "metric_type": spec["metric_type"],
             "value": record.value,
+            "current_value": current_value,
+            "previous_value": previous_value,
             "unit": record.unit,
             "period": record.period,
             "yoy_change_value": yoy_change_value,
@@ -1792,6 +2225,8 @@ def _build_financial_snapshot(
             "metric_name": "free_cash_flow",
             "metric_type": "amount",
             "value": fcf_value,
+            "current_value": fcf_value,
+            "previous_value": prev_fcf,
             "unit": "USD_million",
             "period": str(ocf.get("period") or capex.get("period") or ""),
             "yoy_change_value": yoy_change_value,
@@ -1913,6 +2348,13 @@ def _build_accounting_flags(
         )
     for chunk in note_chunks:
         lowered = chunk.text.lower()
+        note_scope = " ".join(
+            [
+                str(chunk.metadata.get("note_title") or ""),
+                str(chunk.subsection_title or ""),
+                lowered[:400],
+            ]
+        ).lower()
         if "lawsuit" in lowered or "litigation" in lowered:
             continue
         label = ""
@@ -1921,6 +2363,27 @@ def _build_accounting_flags(
                 label = flag_name
                 break
         if not label:
+            continue
+        if label == "Debt and leases" and not any(
+            keyword in note_scope
+            for keyword in ("lease", "leases", "debt", "borrowings", "convertible")
+        ):
+            continue
+        if label == "Revenue recognition" and not any(
+            keyword in note_scope
+            for keyword in (
+                "revenue recognition",
+                "recognized over time",
+                "recognized at a point in time",
+                "performance obligation",
+                "advertising placements",
+            )
+        ):
+            continue
+        if label == "Income tax comparability" and not any(
+            keyword in note_scope
+            for keyword in ("deferred tax", "valuation allowance", "income taxes")
+        ):
             continue
         summary = _build_accounting_flag_summary(chunk, label)
         if len(summary) < 40:
@@ -2135,6 +2598,16 @@ def _classify_summary_topic(text: str, rules: tuple[tuple[str, tuple[str, ...]],
 def _is_high_value_explanation_chunk(text: str) -> bool:
     lowered = text.lower()
     if not any(keyword in lowered for keyword in EXPLANATION_SIGNAL_KEYWORDS):
+        return False
+    if any(
+        keyword in lowered
+        for keyword in (
+            "for a full description",
+            "non-gaap measure",
+            "non-gaap measures",
+            "constant currency basis",
+        )
+    ):
         return False
     if any(keyword in lowered for keyword in ("revenue recognition", "asc 606", "performance obligation", "lessor perspective")):
         return False
@@ -2463,10 +2936,44 @@ def _is_heading_like_match(text: str, start: int) -> bool:
     return "\n" in prefix
 
 
+def _section_match_score(text: str, start: int) -> tuple[int, int]:
+    excerpt = text[start : start + 1200]
+    score = 0
+    if _is_heading_like_match(text, start):
+        score += 5
+    if not _looks_like_toc_excerpt(excerpt):
+        score += 20
+    if not any(_looks_like_toc_line(line) for line in excerpt.splitlines()[:10]):
+        score += 8
+    if len(re.findall(r"[A-Za-z]", excerpt[:400])) >= 180:
+        score += 4
+    return (score, start)
+
+
 def _looks_like_toc_excerpt(text: str) -> bool:
     lowered = text.lower()
     item_count = len(re.findall(r"\bitem\s+\d+[a-z]?\b", lowered))
-    return item_count >= 3 or ("index" in lowered[:120] and "page" in lowered[:120])
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    toc_like_lines = sum(1 for line in lines[:12] if _looks_like_toc_line(line))
+    return (
+        item_count >= 3
+        or toc_like_lines >= 3
+        or ("table of contents" in lowered[:220])
+        or ("index" in lowered[:120] and "page" in lowered[:120])
+    )
+
+
+def _looks_like_toc_line(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line).strip()
+    if not normalized:
+        return False
+    if re.search(r"\bitem\s+\d+[a-z]?\b", normalized, re.IGNORECASE) and re.search(r"\b\d{1,3}\b\s*$", normalized):
+        return True
+    if len(re.findall(r"\b\d{1,3}\b", normalized)) >= 2 and len(normalized) <= 140:
+        return True
+    if "information about our executive officers" in normalized.lower():
+        return True
+    return False
 
 
 def _format_financial_fact(*, label: str, snippet: str) -> str | None:
@@ -2639,6 +3146,12 @@ def _parse_pdf(path: Path) -> str:
 def _cleanup_text(text: str) -> str:
     text = html.unescape(text)
     text = text.replace("\xa0", " ")
+    text = re.sub(r"\b([A-Z])\n([A-Z]{2,})\b", r"\1\2", text)
+    text = re.sub(r"\b([A-Z]{2,10})\n([A-Z]{1,10})\b", r"\1\2", text)
+    text = re.sub(r"\bPART([IVX]+)ITEM\b", r"PART \1\nITEM", text)
+    text = re.sub(r"\b([IVX]+)ITEM\b", r"\1\nITEM", text)
+    text = re.sub(r"\bPART([IVX]+)\b", r"PART \1", text)
+    text = re.sub(r"\bBUSINESSGENERAL\b", "BUSINESS\nGENERAL", text)
     text = re.sub(r"\r\n?", "\n", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -2646,18 +3159,18 @@ def _cleanup_text(text: str) -> str:
 
 
 def _extract_company_name(text: str, selected_file: Path) -> str:
+    candidate = _extract_registrant_name(text)
+    if candidate:
+        return candidate
+
     patterns = (
         re.compile(r"COMPANY CONFORMED NAME:\s*(.+)", re.IGNORECASE),
         re.compile(r"^([\w .,&'-]+)\s+\|\s+\d{4}\s+Form\s+10-K", re.MULTILINE),
-        re.compile(
-            r"for the fiscal year ended[^\n]{0,80}\n([A-Z][A-Za-z0-9 .,&'-]{2,80})",
-            re.IGNORECASE,
-        ),
     )
     for pattern in patterns:
         match = pattern.search(text)
         if match:
-            candidate = match.group(1).strip()
+            candidate = _clean_company_name(match.group(1))
             if (
                 candidate
                 and candidate.lower() not in {"10-k", "form 10-k"}
@@ -2683,13 +3196,14 @@ def _extract_reporting_period(text: str, selected_file: Path) -> str:
         raw = match.group(1)
         return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
 
+    normalized_text = re.sub(r"\s+", " ", text)
     match = re.search(
-        r"for the fiscal year ended\s+([A-Za-z]+\s+\d{1,2},\s+20\d{2})",
-        text,
+        r"for the fiscal year ended\s+([A-Za-z]+\s+\d{1,2}\s*,\s*20\d{2})",
+        normalized_text,
         re.IGNORECASE,
     )
     if match:
-        return match.group(1)
+        return re.sub(r"\s*,\s*", ", ", match.group(1)).strip()
 
     match = re.search(r"(20\d{2})\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日", text)
     if match:
@@ -2700,6 +3214,45 @@ def _extract_reporting_period(text: str, selected_file: Path) -> str:
         return match.group(1)
 
     return selected_file.stem
+
+
+def _extract_registrant_name(text: str) -> str:
+    lines = [line.strip(" _") for line in text.splitlines()]
+    marker = "exact name of registrant as specified in its charter"
+    for index, line in enumerate(lines):
+        if marker not in line.lower():
+            continue
+        candidate_lines: list[str] = []
+        scan = index - 1
+        while scan >= 0 and len(candidate_lines) < 3:
+            current = lines[scan].strip()
+            if not current:
+                scan -= 1
+                continue
+            if any(char.isdigit() for char in current):
+                break
+            if len(current) > 100:
+                break
+            candidate_lines.insert(0, current)
+            scan -= 1
+        candidate = _clean_company_name(" ".join(candidate_lines))
+        if candidate and not _looks_like_date_label(candidate):
+            return candidate
+    return ""
+
+
+def _clean_company_name(value: str) -> str:
+    candidate = " ".join(str(value).split()).strip(" ,.-")
+    replacements = {
+        r"\bCORP\s+ORATION\b": "CORPORATION",
+        r"\bINC\s+ORPORATED\b": "INCORPORATED",
+        r"\bTECH\s+NOLOGIES\b": "TECHNOLOGIES",
+        r"\bHOLD\s+INGS\b": "HOLDINGS",
+    }
+    for pattern, replacement in replacements.items():
+        candidate = re.sub(pattern, replacement, candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\s{2,}", " ", candidate).strip(" ,.-")
+    return candidate
 
 
 def _extract_ticker_from_path(selected_file: Path) -> str | None:

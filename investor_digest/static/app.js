@@ -148,10 +148,10 @@ async function detectRuntime() {
     }
     const payload = await response.json();
     runtimeModelEl.textContent = payload.model || "unknown";
-    runtimeStatusEl.textContent = "本地分析服务已连接，可以直接生成报告。";
+    runtimeStatusEl.textContent = "分析服务已连接，可以直接生成报告。";
   } catch (error) {
     runtimeModelEl.textContent = "离线";
-    runtimeStatusEl.textContent = "当前前端已就绪，但本地分析服务还没有响应。";
+    runtimeStatusEl.textContent = "当前前端已就绪，但分析服务还没有响应。";
   }
 }
 
@@ -235,13 +235,18 @@ function renderDigest(digest) {
   document.getElementById("overview").innerHTML = marked.parse(
     digest.overview_markdown || ""
   );
+  document.getElementById("investor-view").innerHTML = marked.parse(
+    digest.investor_view_markdown || ""
+  );
 
+  fillFactSnapshot(digest.fact_snapshot || []);
   fillList("key-points", digest.key_points);
   fillList("positives", digest.positives);
   fillList("risks", digest.risks);
   fillList("watchlist", digest.watchlist);
   fillWarnings(digest.warnings);
   fillGlossary(digest.glossary);
+  fillEvidenceCards(digest.evidence_cards || []);
 
   document.getElementById("disclaimer").textContent = digest.risk_disclaimer || "";
   document.getElementById("raw-json").textContent = JSON.stringify(digest, null, 2);
@@ -251,6 +256,85 @@ function renderDigest(digest) {
   renderCharts(digest.chart_specs || []);
   downloadJsonEl.disabled = false;
   printReportEl.disabled = false;
+}
+
+function fillFactSnapshot(items = []) {
+  const target = document.getElementById("fact-grid");
+  target.innerHTML = "";
+  if (!items.length) {
+    target.innerHTML = `
+      <article class="fact-card empty-card">
+        <h4>当前没有事实卡片</h4>
+        <p>本轮输出没有足够稳定的结构化指标。</p>
+      </article>
+    `;
+    return;
+  }
+
+  items.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "fact-card";
+    card.innerHTML = `
+      <div class="fact-card-header">
+        <p class="card-kicker">${escapeHtml(item.label)}</p>
+        <span class="confidence-pill">${escapeHtml(item.confidence || "medium")}</span>
+      </div>
+      <h4>${escapeHtml(item.value_text)}</h4>
+      <p class="fact-yoy">${escapeHtml(item.yoy_text || "同比数据暂缺")}</p>
+      <div class="fact-source">
+        <strong>来源：</strong> ${escapeHtml(item.source_label || "未标注")}
+      </div>
+      <p class="fact-snippet">${escapeHtml(item.source_snippet || "")}</p>
+    `;
+    target.appendChild(card);
+  });
+}
+
+function fillEvidenceCards(items = []) {
+  const target = document.getElementById("evidence-grid");
+  target.innerHTML = "";
+  if (!items.length) {
+    target.innerHTML = `
+      <article class="evidence-card empty-card">
+        <h4>当前没有证据卡片</h4>
+        <p>本轮输出没有附加来源片段。</p>
+      </article>
+    `;
+    return;
+  }
+
+  items.forEach((item) => {
+    const metrics = Array.isArray(item.related_metrics) ? item.related_metrics : [];
+    const chips = metrics.length
+      ? `<div class="evidence-chip-row">${metrics
+          .map((metric) => `<span class="evidence-chip">${escapeHtml(metric)}</span>`)
+          .join("")}</div>`
+      : "";
+
+    const card = document.createElement("article");
+    card.className = `evidence-card evidence-${escapeHtml(item.category || "explanation")}`;
+    card.innerHTML = `
+      <div class="evidence-card-header">
+        <div>
+          <p class="card-kicker">${escapeHtml(item.category || "evidence")}</p>
+          <h4>${escapeHtml(item.title)}</h4>
+        </div>
+        <span class="confidence-pill">${escapeHtml(item.importance || "medium")}</span>
+      </div>
+      <p class="evidence-summary">${escapeHtml(item.summary || "")}</p>
+      ${chips}
+      <div class="evidence-meta">
+        <strong>来源：</strong> ${escapeHtml(item.source_label || "未标注")}
+      </div>
+      <p class="evidence-snippet">${escapeHtml(item.source_snippet || "")}</p>
+      ${
+        item.why_it_matters
+          ? `<p class="evidence-why"><strong>为何重要：</strong> ${escapeHtml(item.why_it_matters)}</p>`
+          : ""
+      }
+    `;
+    target.appendChild(card);
+  });
 }
 
 function fillList(elementId, items = []) {
@@ -331,6 +415,9 @@ function renderCharts(chartSpecs = []) {
   chartSpecs.forEach((spec, index) => {
     const card = document.createElement("article");
     card.className = `chart-card ${getChartCardClass(spec, index, chartSpecs)}`;
+    if (spec.chart_type === "sankey") {
+      card.classList.add("is-sankey");
+    }
     const canvasId = `chart-${Math.random().toString(36).slice(2)}`;
     card.innerHTML = `
       <div class="chart-card-header">
@@ -401,9 +488,41 @@ function buildChartOption(spec) {
   }
 
   if (spec.chart_type === "sankey") {
-    const nodes = (spec.flow_nodes || []).map((node, index) => ({
+    const wrapSankeyLabel = (value) => {
+      const text = String(value || "").trim();
+      if (!text || text.length <= 16 || !text.includes(" ")) {
+        return text;
+      }
+      const words = text.split(/\s+/);
+      const lines = [];
+      let current = "";
+      for (const word of words) {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length > 16 && current) {
+          lines.push(current);
+          current = word;
+        } else {
+          current = next;
+        }
+      }
+      if (current) {
+        lines.push(current);
+      }
+      return lines.slice(0, 2).join("\n");
+    };
+    const nodes = [...(spec.flow_nodes || [])]
+      .sort((a, b) => {
+        const depthA = Number(a?.depth ?? 99);
+        const depthB = Number(b?.depth ?? 99);
+        if (depthA !== depthB) {
+          return depthA - depthB;
+        }
+        return Number(a?.layout_order ?? 0) - Number(b?.layout_order ?? 0);
+      })
+      .map((node, index) => ({
       name: node.name,
       value: node.value ?? undefined,
+      depth: node.depth ?? undefined,
       itemStyle: {
         color: node.item_style_color || palette[index % palette.length],
         borderColor: "rgba(23,49,58,0.08)",
@@ -425,25 +544,32 @@ function buildChartOption(spec) {
       series: [
         {
           type: "sankey",
-          left: 10,
-          top: 28,
-          right: 16,
-          bottom: 12,
+          left: 36,
+          top: 40,
+          right: 210,
+          bottom: 24,
           emphasis: { focus: "adjacency" },
           draggable: false,
-          nodeWidth: 18,
-          nodeGap: 18,
+          nodeAlign: "left",
+          layoutIterations: 32,
+          nodeWidth: 26,
+          nodeGap: 34,
           data: nodes,
           links,
           lineStyle: {
             color: "gradient",
-            curveness: 0.46,
-            opacity: 0.42,
+            curveness: 0.38,
+            opacity: 0.48,
           },
           label: {
             color: "#17313a",
-            fontSize: 13,
+            fontSize: 14,
             fontWeight: 600,
+            position: "right",
+            distance: 10,
+            width: 180,
+            overflow: "break",
+            formatter: (params) => wrapSankeyLabel(params?.name),
           },
         },
       ],
