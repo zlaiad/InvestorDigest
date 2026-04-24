@@ -34,7 +34,7 @@ class SankeyLink(BaseModel):
 
 class ChartSpec(BaseModel):
     title: str
-    chart_type: Literal["bar", "line", "area", "stacked_bar", "donut", "sankey"]
+    chart_type: Literal["bar", "line", "area", "stacked_bar", "donut", "sankey", "waterfall"]
     why_it_matters: str = ""
     x_axis_label: str = ""
     categories: list[str] = Field(default_factory=list)

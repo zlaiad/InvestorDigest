@@ -217,15 +217,17 @@ function toggleBusy(isBusy) {
 }
 
 function renderDigest(digest) {
+  const generatedAtText = `报告生成时间：${new Date().toLocaleString("zh-Hans-CN", {
+    hour12: false,
+  })}`;
   reportTitleEl.textContent = digest.company_name;
   summaryCompanyTitleEl.textContent = digest.company_name;
   document.getElementById("meta-company").textContent = digest.ticker || "10-K";
   document.getElementById("meta-period").textContent = digest.reporting_period;
   document.getElementById("meta-audience").textContent = digest.audience;
   companyAvatarEl.textContent = buildCompanyAvatar(digest.company_name);
-  document.getElementById("generated-at").textContent = `报告生成时间：${new Date().toLocaleString("zh-Hans-CN", {
-    hour12: false,
-  })}`;
+  document.getElementById("generated-at").textContent = generatedAtText;
+  document.getElementById("footer-generated-at").textContent = generatedAtText.replace(/^报告生成时间：/u, "");
   document.getElementById("takeaway").textContent = digest.one_sentence_takeaway;
   document.getElementById("overview").innerHTML = marked.parse(
     digest.overview_markdown || ""
@@ -235,6 +237,8 @@ function renderDigest(digest) {
   );
 
   fillFactSnapshot(digest.fact_snapshot || []);
+  fillCoverPills(digest.fact_snapshot || []);
+  fillPlainLanguageSummary(digest);
   fillList("key-points", digest.key_points);
   fillList("positives", digest.positives);
   fillList("risks", digest.risks);
@@ -255,7 +259,12 @@ function renderDigest(digest) {
 
 function fillFactSnapshot(items = []) {
   const target = document.getElementById("fact-grid");
+  const morePanel = document.getElementById("more-facts-panel");
+  const moreTarget = document.getElementById("more-fact-grid");
+  const moreCount = document.getElementById("more-facts-count");
   target.innerHTML = "";
+  moreTarget.innerHTML = "";
+  morePanel.classList.add("hidden");
   if (!items.length) {
     target.innerHTML = `
       <article class="fact-card empty-card">
@@ -266,29 +275,130 @@ function fillFactSnapshot(items = []) {
     return;
   }
 
-  items.forEach((item) => {
+  const { primary, secondary } = splitFactItems(items);
+
+  primary.forEach((item) => {
+    target.appendChild(buildFactCard(item, "primary"));
+  });
+
+  if (secondary.length) {
+    morePanel.classList.remove("hidden");
+    moreCount.textContent = `${secondary.length} 项`;
+    secondary.forEach((item) => {
+      moreTarget.appendChild(buildFactCard(item, "secondary"));
+    });
+  }
+}
+
+function fillCoverPills(items = []) {
+  const target = document.getElementById("cover-pill-grid");
+  target.innerHTML = "";
+  if (!items.length) {
+    return;
+  }
+
+  const priority = [
+    "revenue",
+    "net_income",
+    "operating_cash_flow",
+    "operating_income",
+    "diluted_eps",
+    "free_cash_flow",
+    "gross_margin",
+    "operating_margin",
+  ];
+  const rank = new Map(priority.map((key, index) => [key, index]));
+  const selected = [...items]
+    .sort((a, b) => {
+      const aRank = rank.has(a.metric_key) ? rank.get(a.metric_key) : 99;
+      const bRank = rank.has(b.metric_key) ? rank.get(b.metric_key) : 99;
+      return aRank - bRank;
+    })
+    .slice(0, 3);
+
+  selected.forEach((item) => {
     const trend = parseFactTrend(item.yoy_text || "");
-    const card = document.createElement("article");
-    card.className = "fact-card";
-    card.innerHTML = `
-      <div class="fact-card-header">
-        <p class="card-kicker">${escapeHtml(item.label)}</p>
-        <span class="confidence-pill">${escapeHtml(item.confidence || "medium")}</span>
+    const performance = formatPerformanceBadgeForMetric(item);
+    const pill = document.createElement("article");
+    pill.className = `cover-pill ${trend.yoy.tone}`;
+    pill.innerHTML = `
+      <div class="cover-pill-head">
+        <span class="cover-pill-label">${escapeHtml(item.label)}</span>
+        <span class="cover-pill-confidence ${escapeHtml(performance.className)}">${escapeHtml(performance.label)}</span>
       </div>
-      <h4>${escapeHtml(item.value_text)}</h4>
-      <div class="fact-trend">
-        <div class="fact-trend-row ${trend.yoy.tone}">
-          <span class="fact-trend-label">${escapeHtml(trend.yoy.label)}</span>
-          <span class="fact-trend-value">${escapeHtml(trend.yoy.value)}</span>
-        </div>
-        <div class="fact-trend-row ${trend.change.tone}">
-          <span class="fact-trend-label">${escapeHtml(trend.change.label)}</span>
-          <span class="fact-trend-value">${escapeHtml(trend.change.value)}</span>
-        </div>
+      <strong>${escapeHtml(item.value_text)}</strong>
+      <div class="cover-pill-meta">
+        <span>${escapeHtml(trend.yoy.label)} ${escapeHtml(trend.yoy.value)}</span>
+        <span>${escapeHtml(trend.change.label)} ${escapeHtml(trend.change.value)}</span>
       </div>
     `;
-    target.appendChild(card);
+    target.appendChild(pill);
   });
+}
+
+function fillPlainLanguageSummary(digest) {
+  const target = document.getElementById("plain-language-summary");
+  const content =
+    digest.investor_view_markdown ||
+    digest.overview_markdown ||
+    digest.one_sentence_takeaway ||
+    "";
+
+  if (!content.trim()) {
+    target.innerHTML = "<p>当前没有可展示的通俗总结。</p>";
+    return;
+  }
+
+  target.innerHTML = marked.parse(content);
+}
+
+function splitFactItems(items) {
+  const priority = [
+    "revenue",
+    "gross_profit",
+    "operating_income",
+    "net_income",
+    "diluted_eps",
+    "operating_cash_flow",
+  ];
+  const rank = new Map(priority.map((key, index) => [key, index]));
+  const sorted = [...items].sort((a, b) => {
+    const aRank = rank.has(a.metric_key) ? rank.get(a.metric_key) : 99;
+    const bRank = rank.has(b.metric_key) ? rank.get(b.metric_key) : 99;
+    if (aRank !== bRank) {
+      return aRank - bRank;
+    }
+    return 0;
+  });
+  return {
+    primary: sorted.slice(0, 6),
+    secondary: sorted.slice(6),
+  };
+}
+
+function buildFactCard(item, variant = "primary") {
+  const trend = parseFactTrend(item.yoy_text || "");
+  const performance = formatPerformanceBadgeForMetric(item);
+  const card = document.createElement("article");
+  card.className = `fact-card fact-card-${variant}`;
+  card.innerHTML = `
+    <div class="fact-card-header">
+      <p class="card-kicker">${escapeHtml(item.label)}</p>
+      <span class="confidence-pill ${escapeHtml(performance.className)}">${escapeHtml(performance.label)}</span>
+    </div>
+    <h4>${escapeHtml(item.value_text)}</h4>
+    <div class="fact-trend">
+      <div class="fact-trend-row ${trend.yoy.tone}">
+        <span class="fact-trend-label">${escapeHtml(trend.yoy.label)}</span>
+        <span class="fact-trend-value">${escapeHtml(trend.yoy.value)}</span>
+      </div>
+      <div class="fact-trend-row ${trend.change.tone}">
+        <span class="fact-trend-label">${escapeHtml(trend.change.label)}</span>
+        <span class="fact-trend-value">${escapeHtml(trend.change.value)}</span>
+      </div>
+    </div>
+  `;
+  return card;
 }
 
 function parseFactTrend(text) {
@@ -348,6 +458,7 @@ function fillEvidenceCards(items = []) {
           .map((metric) => `<span class="evidence-chip">${escapeHtml(metric)}</span>`)
           .join("")}</div>`
       : "";
+    const confidence = formatImportanceBadge(item.importance || "medium");
 
     const card = document.createElement("article");
     card.className = `evidence-card evidence-${escapeHtml(item.category || "explanation")}`;
@@ -357,7 +468,7 @@ function fillEvidenceCards(items = []) {
           <p class="card-kicker">${escapeHtml(item.category || "evidence")}</p>
           <h4>${escapeHtml(item.title)}</h4>
         </div>
-        <span class="confidence-pill">${escapeHtml(item.importance || "medium")}</span>
+        <span class="confidence-pill ${escapeHtml(confidence.className)}">${escapeHtml(confidence.label)}</span>
       </div>
       <p class="evidence-summary">${escapeHtml(item.summary || "")}</p>
       ${chips}
@@ -463,16 +574,20 @@ function renderCharts(chartSpecs = []) {
   }
 
   regularCharts.forEach((spec, index) => {
-    renderChartCard(grid, spec, false, regularCharts, index);
+    renderChartCard(grid, spec, false, regularCharts, index, regularCharts.length === 1);
   });
 }
 
-function renderChartCard(target, spec, forceFeatured = false, chartSpecs = [], index = 0) {
+function renderChartCard(target, spec, forceFeatured = false, chartSpecs = [], index = 0, isSolo = false) {
   const card = document.createElement("article");
   card.className = `chart-card ${forceFeatured ? "featured" : getChartCardClass(spec, index, chartSpecs)}`;
+  if (isSolo) {
+    card.classList.add("solo");
+  }
   if (spec.chart_type === "sankey") {
     card.classList.add("is-sankey");
   }
+  const confidence = formatPerformanceBadgeForChart(spec, state.digest?.fact_snapshot || []);
   const canvasId = `chart-${Math.random().toString(36).slice(2)}`;
   card.innerHTML = `
     <div class="chart-card-header">
@@ -480,7 +595,7 @@ function renderChartCard(target, spec, forceFeatured = false, chartSpecs = [], i
         <h3>${escapeHtml(spec.title)}</h3>
         <p class="chart-copy">${escapeHtml(spec.why_it_matters || "")}</p>
       </div>
-      <span class="confidence-pill">${escapeHtml(spec.confidence || "medium")}</span>
+      <span class="confidence-pill ${escapeHtml(confidence.className)}">${escapeHtml(confidence.label)}</span>
     </div>
     <div id="${canvasId}" class="chart-canvas"></div>
     <div class="source-footnote">
@@ -540,6 +655,153 @@ function buildChartOption(spec) {
             value: firstSeries.values?.[index] ?? 0,
           })),
         },
+      ],
+    };
+  }
+
+  if (spec.chart_type === "waterfall") {
+    const firstSeries = spec.series?.[0] || { values: [] };
+    const rawValues = (firstSeries.values || []).map((value) => Number(value || 0));
+    const helper = [];
+    const positive = [];
+    const negative = [];
+    let runningTotal = 0;
+    const levelAfterBar = [];
+
+    const buildConnectorSeries = (startIndex, endIndex, value) => {
+      const lineData = rawValues.map((_, idx) => {
+        if (idx === startIndex || idx === endIndex) {
+          return value;
+        }
+        return null;
+      });
+      return {
+        type: "line",
+        data: lineData,
+        symbol: "none",
+        silent: true,
+        tooltip: { show: false },
+        connectNulls: false,
+        lineStyle: {
+          color: "rgba(23,49,58,0.24)",
+          width: 1.6,
+          type: "dashed",
+        },
+        z: 1,
+      };
+    };
+
+    rawValues.forEach((value, index) => {
+      const isTerminalBar = index === rawValues.length - 1;
+      if (index === 0 || isTerminalBar) {
+        helper.push({
+          value: 0,
+          itemStyle: { color: "transparent", borderColor: "transparent" },
+        });
+        positive.push(Math.max(value, 0));
+        negative.push(value < 0 ? Math.abs(value) : null);
+        if (index === 0) {
+          runningTotal = value;
+        }
+        levelAfterBar[index] = index === 0 ? value : runningTotal;
+        return;
+      }
+
+      if (value >= 0) {
+        helper.push({
+          value: runningTotal,
+          itemStyle: { color: "rgba(15,118,110,0.12)", borderColor: "transparent" },
+        });
+        positive.push(value);
+        negative.push(null);
+        runningTotal += value;
+        levelAfterBar[index] = runningTotal;
+      } else {
+        helper.push({
+          value: runningTotal + value,
+          itemStyle: { color: "rgba(239,68,68,0.12)", borderColor: "transparent" },
+        });
+        positive.push(null);
+        negative.push(Math.abs(value));
+        runningTotal += value;
+        levelAfterBar[index] = runningTotal;
+      }
+    });
+
+    const connectorLineSeries = [];
+    for (let index = 0; index < rawValues.length - 1; index += 1) {
+      const level = levelAfterBar[index];
+      if (typeof level !== "number" || !Number.isFinite(level)) {
+        continue;
+      }
+      connectorLineSeries.push(buildConnectorSeries(index, index + 1, level));
+    }
+
+    return {
+      color: palette,
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (params) => {
+          const idx = params?.[0]?.dataIndex ?? 0;
+          const raw = rawValues[idx] ?? 0;
+          return `${escapeHtml(categories[idx] || "")}<br/>${valueFormatter.format(raw)}（百万美元）`;
+        },
+      },
+      legend: { show: false },
+      grid: { top: 44, left: 22, right: 20, bottom: 28, containLabel: true },
+      xAxis: {
+        type: "category",
+        data: categories,
+        axisLabel: { color: "#536a72", interval: 0 },
+        axisLine: { lineStyle: { color: "rgba(23,49,58,0.15)" } },
+      },
+      yAxis: {
+        type: "value",
+        axisLabel: {
+          color: "#536a72",
+          formatter: (value) => valueFormatter.format(Number(value || 0)),
+        },
+        splitLine: { lineStyle: { color: "rgba(23,49,58,0.08)" } },
+      },
+      series: [
+        {
+          type: "bar",
+          stack: "total",
+          itemStyle: { color: "transparent", borderColor: "transparent" },
+          emphasis: { disabled: true },
+          data: helper,
+          silent: true,
+        },
+        {
+          name: "positive",
+          type: "bar",
+          stack: "total",
+          itemStyle: { color: palette[0] || "#0f766e", borderRadius: [10, 10, 0, 0] },
+          data: positive,
+          label: {
+            show: true,
+            position: "top",
+            color: "#17313a",
+            formatter: ({ dataIndex, value }) =>
+              value == null ? "" : integerFormatter.format(rawValues[dataIndex] || 0),
+          },
+        },
+        {
+          name: "negative",
+          type: "bar",
+          stack: "total",
+          itemStyle: { color: palette[1] || "#ef4444", borderRadius: [10, 10, 0, 0] },
+          data: negative,
+          label: {
+            show: true,
+            position: "bottom",
+            color: "#17313a",
+            formatter: ({ dataIndex, value }) =>
+              value == null ? "" : integerFormatter.format(rawValues[dataIndex] || 0),
+          },
+        },
+        ...connectorLineSeries,
       ],
     };
   }
@@ -787,6 +1049,121 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function formatImportanceBadge(value) {
+  const normalized = String(value || "medium").toLowerCase();
+  const labels = {
+    high: "高关注",
+    medium: "关注",
+    low: "补充",
+  };
+  return {
+    label: labels[normalized] || labels.medium,
+    className: `is-${["high", "medium", "low"].includes(normalized) ? normalized : "medium"}`,
+  };
+}
+
+function formatPerformanceBadgeForMetric(item) {
+  const metricKey = String(item?.metric_key || "");
+  const yoy = extractSignedPercent(item?.yoy_text || "");
+  const direction = isInverseMetric(metricKey) ? -1 : 1;
+  return formatPerformanceBadgeFromScore((yoy ?? 0) * direction, yoy === null);
+}
+
+function formatPerformanceBadgeForChart(spec, factSnapshot = []) {
+  const title = String(spec?.title || "");
+  const chartType = String(spec?.chart_type || "");
+  const metricLookup = new Map(
+    (factSnapshot || []).map((item) => [String(item.metric_key || ""), item])
+  );
+
+  const pickAverage = (keys) => {
+    const scores = keys
+      .map((key) => {
+        const item = metricLookup.get(key);
+        if (!item) {
+          return null;
+        }
+        const yoy = extractSignedPercent(item.yoy_text || "");
+        if (yoy === null) {
+          return null;
+        }
+        return yoy * (isInverseMetric(key) ? -1 : 1);
+      })
+      .filter((value) => typeof value === "number");
+    if (!scores.length) {
+      return null;
+    }
+    return scores.reduce((sum, value) => sum + value, 0) / scores.length;
+  };
+
+  if (chartType === "waterfall" || title.includes("现金流")) {
+    const score = pickAverage(["operating_cash_flow", "free_cash_flow", "capital_expenditures"]);
+    return formatPerformanceBadgeFromScore(score ?? 0, score === null);
+  }
+
+  if (chartType === "sankey" || title.includes("营收流向") || title.includes("Revenue-to-profit")) {
+    const score = pickAverage(["revenue", "operating_income", "net_income"]);
+    return formatPerformanceBadgeFromScore(score ?? 0, score === null);
+  }
+
+  if (title.includes("流动性") || title.includes("债务") || title.includes("Liquidity")) {
+    const score = pickAverage(["cash_and_equivalents", "short_term_investments", "total_debt"]);
+    return formatPerformanceBadgeFromScore(score ?? 0, score === null);
+  }
+
+  const score = deriveScoreFromSeries(spec);
+  return formatPerformanceBadgeFromScore(score ?? 0, score === null);
+}
+
+function deriveScoreFromSeries(spec) {
+  const seriesList = Array.isArray(spec?.series) ? spec.series : [];
+  const scores = [];
+  seriesList.forEach((series) => {
+    const values = Array.isArray(series?.values) ? series.values.filter((value) => typeof value === "number") : [];
+    if (values.length < 2) {
+      return;
+    }
+    const previous = Number(values[values.length - 2] || 0);
+    const current = Number(values[values.length - 1] || 0);
+    if (!Number.isFinite(previous) || Math.abs(previous) < 1e-6) {
+      return;
+    }
+    scores.push(((current - previous) / Math.abs(previous)) * 100);
+  });
+  if (!scores.length) {
+    return null;
+  }
+  return scores.reduce((sum, value) => sum + value, 0) / scores.length;
+}
+
+function extractSignedPercent(text) {
+  const match = String(text || "").match(/同比\s*([+-]?\d+(?:\.\d+)?)%/u);
+  return match ? Number(match[1]) : null;
+}
+
+function isInverseMetric(metricKey) {
+  return ["total_debt", "capital_expenditures"].includes(String(metricKey || ""));
+}
+
+function formatPerformanceBadgeFromScore(score, isUnknown = false) {
+  if (isUnknown) {
+    return { label: "信息有限", className: "is-neutral" };
+  }
+  if (score >= 20) {
+    return { label: "显著改善", className: "is-positive-strong" };
+  }
+  if (score >= 5) {
+    return { label: "表现改善", className: "is-positive" };
+  }
+  if (score > -5) {
+    return { label: "基本持平", className: "is-neutral" };
+  }
+  if (score > -15) {
+    return { label: "小幅承压", className: "is-negative" };
+  }
+  return { label: "明显承压", className: "is-negative-strong" };
 }
 
 function buildCompanyAvatar(name = "") {

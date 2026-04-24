@@ -785,7 +785,16 @@ def _build_metric_records(
         )
         if table_hit:
             sources = [str(table_hit["source"]), *corroborating_sources]
-            confidence = "high" if len(sources) >= 2 else "medium"
+            source_label = str(table_hit.get("source") or "")
+            table_name = str(table_hit.get("table_name") or "")
+            is_inline_ixbrl = "inline xbrl" in source_label.lower()
+            is_derived_ixbrl = table_name.lower().startswith("derived from inline xbrl")
+            if is_inline_ixbrl and not is_derived_ixbrl:
+                confidence = "high"
+            elif len(corroborating_sources) >= 1:
+                confidence = "high"
+            else:
+                confidence = "medium"
             validation_errors = _validate_metric_value(
                 metric=metric_name,
                 metric_type=str(spec["metric_type"]),
@@ -1227,8 +1236,34 @@ def _select_ixbrl_metric_series(
     *,
     fallback_period: str,
 ) -> dict[str, object] | None:
-    if not candidates:
+    distinct = _select_ixbrl_metric_history(metric_name, candidates, limit=2)
+    if not distinct:
         return None
+
+    current = distinct[0]
+    previous = distinct[1] if len(distinct) > 1 else None
+    fact_name = str(current.get("fact_name") or "")
+    return {
+        "value": current.get("value"),
+        "current_value": current.get("value"),
+        "previous_value": previous.get("value") if previous else None,
+        "unit": str(CORE_METRIC_SPECS.get(metric_name, {}).get("unit", "")),
+        "period": str(current.get("period_key") or fallback_period),
+        "source": "Inline XBRL facts",
+        "chunk_id": "",
+        "table_name": fact_name or "Inline XBRL fact",
+        "evidence": f"{fact_name} ({current.get('context_id')}): {current.get('evidence')}",
+    }
+
+
+def _select_ixbrl_metric_history(
+    metric_name: str,
+    candidates: list[dict[str, object]],
+    *,
+    limit: int = 3,
+) -> list[dict[str, object]]:
+    if not candidates:
+        return []
 
     if metric_name in IXBRL_DURATION_METRICS:
         preferred = [
@@ -1263,25 +1298,59 @@ def _select_ixbrl_metric_series(
             continue
         seen_keys.add(period_key)
         distinct.append(candidate)
-        if len(distinct) >= 2:
+        if len(distinct) >= limit:
             break
-    if not distinct:
-        return None
+    return distinct
 
-    current = distinct[0]
-    previous = distinct[1] if len(distinct) > 1 else None
-    fact_name = str(current.get("fact_name") or "")
-    return {
-        "value": current.get("value"),
-        "current_value": current.get("value"),
-        "previous_value": previous.get("value") if previous else None,
-        "unit": str(CORE_METRIC_SPECS.get(metric_name, {}).get("unit", "")),
-        "period": str(current.get("period_key") or fallback_period),
-        "source": "Inline XBRL facts",
-        "chunk_id": "",
-        "table_name": fact_name or "Inline XBRL fact",
-        "evidence": f"{fact_name} ({current.get('context_id')}): {current.get('evidence')}",
-    }
+
+def _extract_ixbrl_metric_history(
+    selected_file: Path,
+    metric_name: str,
+    reporting_period: str,
+    *,
+    periods: int = 3,
+) -> list[dict[str, object]]:
+    if selected_file.suffix.lower() not in {".html", ".htm"}:
+        return []
+    fact_names = IXBRL_METRIC_FACT_NAMES.get(metric_name)
+    if not fact_names:
+        return []
+
+    raw = selected_file.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(raw, "html.parser")
+    contexts = _parse_ixbrl_contexts(soup)
+    candidates: list[dict[str, object]] = []
+    for fact_name in fact_names:
+        for tag in soup.find_all("ix:nonfraction", attrs={"name": fact_name}):
+            parsed = _parse_ixbrl_fact(
+                tag,
+                contexts=contexts,
+                metric_name=metric_name,
+                target_unit=str(CORE_METRIC_SPECS[metric_name]["unit"]),
+            )
+            if parsed:
+                candidates.append(parsed)
+
+    history = _select_ixbrl_metric_history(metric_name, candidates, limit=periods)
+    if not history:
+        return []
+
+    normalized: list[dict[str, object]] = []
+    fallback_period = _extract_period_from_text(reporting_period) or reporting_period
+    for item in reversed(history):
+        fact_name = str(item.get("fact_name") or "")
+        period_key = str(item.get("period_key") or fallback_period)
+        normalized.append(
+            {
+                "period": period_key,
+                "value": item.get("value"),
+                "unit": str(CORE_METRIC_SPECS.get(metric_name, {}).get("unit", "")),
+                "source": "Inline XBRL facts",
+                "table_name": fact_name or "Inline XBRL fact",
+                "evidence": f"{fact_name} ({item.get('context_id')}): {item.get('evidence')}",
+            }
+        )
+    return normalized
 
 
 def _extract_ixbrl_total_debt_series(
@@ -1486,8 +1555,28 @@ def _extract_ixbrl_profit_flow_totals(
     cost_of_revenue = pick_fact_value(("us-gaap:CostOfRevenue",))
     costs_and_expenses = pick_fact_value(("us-gaap:CostsAndExpenses",))
     operating_expenses = pick_fact_value(("us-gaap:OperatingExpenses",))
+    gross_profit = pick_fact_value(("us-gaap:GrossProfit",))
+    income_before_tax = pick_fact_value(
+        ("us-gaap:IncomeBeforeTaxExpenseBenefit", "us-gaap:ProfitLossBeforeTax")
+    )
+    income_tax_expense_benefit = pick_fact_value(("us-gaap:IncomeTaxExpenseBenefit",))
+    nonoperating_income_expense = pick_fact_value(
+        (
+            "us-gaap:NonoperatingIncomeExpense",
+            "us-gaap:OtherNonoperatingIncomeExpense",
+            "us-gaap:InterestAndOtherNet",
+        )
+    )
 
-    if cost_of_revenue is None and costs_and_expenses is None and operating_expenses is None:
+    if (
+        cost_of_revenue is None
+        and costs_and_expenses is None
+        and operating_expenses is None
+        and gross_profit is None
+        and income_before_tax is None
+        and income_tax_expense_benefit is None
+        and nonoperating_income_expense is None
+    ):
         return None
 
     payload: dict[str, float] = {}
@@ -1497,6 +1586,14 @@ def _extract_ixbrl_profit_flow_totals(
         payload["operating_expenses"] = operating_expenses
     if costs_and_expenses is not None:
         payload["costs_and_expenses"] = costs_and_expenses
+    if gross_profit is not None:
+        payload["gross_profit"] = gross_profit
+    if income_before_tax is not None:
+        payload["income_before_tax"] = income_before_tax
+    if income_tax_expense_benefit is not None:
+        payload["income_tax_expense_benefit"] = income_tax_expense_benefit
+    if nonoperating_income_expense is not None:
+        payload["nonoperating_income_expense"] = nonoperating_income_expense
     return payload
 
 

@@ -10,6 +10,7 @@ from investor_digest.llm_client import LocalOpenAIClient
 from investor_digest.parser import (
     CORE_METRIC_SPECS,
     _extract_item8_region,
+    _extract_ixbrl_metric_history,
     _extract_ixbrl_profit_flow_totals,
     _extract_ixbrl_revenue_composition,
     _build_financial_snapshot,
@@ -1490,11 +1491,13 @@ def _normalize_chart_type(value: str) -> str:
         "stackedbar": "stacked_bar",
         "flow": "sankey",
         "moneyflow": "sankey",
+        "bridge": "waterfall",
+        "waterfallchart": "waterfall",
     }
     compact = value.replace("-", "").replace("_", "").replace(" ", "")
     if compact in aliases:
         return aliases[compact]
-    allowed = {"bar", "line", "area", "stacked_bar", "donut", "sankey"}
+    allowed = {"bar", "line", "area", "stacked_bar", "donut", "sankey", "waterfall"}
     return value if value in allowed else "bar"
 
 
@@ -1707,33 +1710,78 @@ def _build_programmatic_charts(
         ("operating_income", label("营业利润", "Operating income")),
         ("net_income", label("净利润", "Net income")),
     ]
-    trend_series = []
-    for key, series_name in trend_metrics:
-        metric = metrics.get(key)
-        if not isinstance(metric, dict):
-            continue
-        current_value = metric.get("value")
-        previous_value = metric.get("previous_value")
-        if current_value is None or previous_value is None:
-            continue
-        trend_series.append(
-            {
-                "name": series_name,
-                "unit": "USD_million",
-                "values": [_coerce_number(previous_value), _coerce_number(current_value)],
-            }
+    history_map: dict[str, list[dict[str, object]]] = {}
+    for key, _series_name in trend_metrics:
+        history = _extract_ixbrl_metric_history(
+            prepared.document.selected_file,
+            key,
+            prepared.document.reporting_period,
+            periods=3,
         )
+        if history:
+            history_map[key] = history
+
+    trend_categories: list[str] = []
+    if history_map.get("revenue") and len(history_map["revenue"]) >= 3:
+        trend_categories = [
+            _compact_period_label(str(entry.get("period") or ""))
+            for entry in history_map["revenue"][-3:]
+        ]
+    else:
+        trend_categories = [previous_period, current_period]
+
+    trend_series = []
+    if len(trend_categories) >= 3 and history_map.get("revenue"):
+        anchor_periods = [str(entry.get("period") or "") for entry in history_map["revenue"][-3:]]
+        for key, series_name in trend_metrics:
+            metric_history = history_map.get(key)
+            if not metric_history:
+                continue
+            series_values_by_period = {
+                str(entry.get("period") or ""): _coerce_number(entry.get("value"))
+                for entry in metric_history
+            }
+            values = [series_values_by_period.get(period) for period in anchor_periods]
+            if sum(value is not None for value in values) < 2:
+                continue
+            trend_series.append(
+                {
+                    "name": series_name,
+                    "unit": "USD_million",
+                    "values": values,
+                }
+            )
+    else:
+        for key, series_name in trend_metrics:
+            metric = metrics.get(key)
+            if not isinstance(metric, dict):
+                continue
+            current_value = metric.get("value")
+            previous_value = metric.get("previous_value")
+            if current_value is None or previous_value is None:
+                continue
+            trend_series.append(
+                {
+                    "name": series_name,
+                    "unit": "USD_million",
+                    "values": [_coerce_number(previous_value), _coerce_number(current_value)],
+                }
+            )
     if len(trend_series) >= 2:
+        use_multiyear = len(trend_categories) >= 3
         charts.append(
             {
-                "title": label("收入与利润两年对比", "Revenue and profit: two-year comparison"),
+                "title": label(
+                    "收入与利润近三年趋势" if use_multiyear else "收入与利润两年对比",
+                    "Revenue and profit: three-year trend" if use_multiyear else "Revenue and profit: two-year comparison",
+                ),
                 "chart_type": "line",
                 "why_it_matters": label(
-                    "先看营收，再看营业利润和净利润，能更快判断增长是否真的转化成利润。",
-                    "Comparing revenue, operating income, and net income shows whether growth is translating into profit.",
+                    "先看营收，再看营业利润和净利润，能更快判断增长是否只是放大规模，还是持续转化成利润。",
+                    "Tracking revenue, operating income, and net income across multiple years shows whether growth is scaling into durable profit.",
                 ),
                 "x_axis_label": label("财年", "Fiscal year"),
-                "categories": [previous_period, current_period],
+                "categories": trend_categories,
                 "series": trend_series,
                 "palette": palette[: len(trend_series)],
                 "source_snippet": _chart_source_from_metrics(
@@ -1760,11 +1808,11 @@ def _build_programmatic_charts(
     if len(cash_categories) >= 2:
         charts.append(
             {
-                "title": label("现金流结构", "Cash generation profile"),
-                "chart_type": "bar",
+                "title": label("现金流桥", "Cash flow bridge"),
+                "chart_type": "waterfall",
                 "why_it_matters": label(
-                    "经营现金流、资本开支和自由现金流放在一起，更容易看出公司是在强力造血，还是主要靠压缩投资来维持现金流。",
-                    "Showing operating cash flow, capex, and free cash flow together helps investors judge cash generation quality.",
+                    "经营现金流、资本开支和自由现金流并不是同一个饼的组成部分，更适合用桥接图看现金是如何被资本开支消耗后剩下自由现金流的。",
+                    "Operating cash flow, capex, and free cash flow are not parts of one pie, so a bridge view better shows how investment spending turns operating cash flow into free cash flow.",
                 ),
                 "x_axis_label": label("指标", "Metric"),
                 "categories": cash_categories,
@@ -1772,10 +1820,14 @@ def _build_programmatic_charts(
                     {
                         "name": current_period,
                         "unit": "USD_million",
-                        "values": cash_values,
+                        "values": [
+                            _coerce_number(metrics.get("operating_cash_flow", {}).get("value")),
+                            -abs(_coerce_number(metrics.get("capital_expenditures", {}).get("value"))),
+                            _coerce_number(metrics.get("free_cash_flow", {}).get("value")),
+                        ],
                     }
                 ],
-                "palette": ["#0f766e"],
+                "palette": ["#0f766e", "#ef4444", "#16a34a"],
                 "source_snippet": _chart_source_from_metrics(
                     snapshot,
                     ("operating_cash_flow", "capital_expenditures", "free_cash_flow"),
@@ -1896,6 +1948,9 @@ def _build_profit_flow_sankey(
                 total_costs = _coerce_number(ixbrl_totals.get("costs_and_expenses"))
                 if total_costs > 0 and cost_of_revenue_value > 0:
                     operating_expenses_value = max(total_costs - cost_of_revenue_value, 0.0)
+        direct_gross_profit = _coerce_number(ixbrl_totals.get("gross_profit"))
+        if gross_profit_value <= 0 and direct_gross_profit > 0:
+            gross_profit_value = direct_gross_profit
 
     if gross_profit_value <= 0 and segment_flow:
         gross_profit_value = _coerce_number(segment_flow.get("gross_profit"))
@@ -1911,7 +1966,28 @@ def _build_profit_flow_sankey(
     if operating_expenses_value <= 0 and gross_profit_value > 0:
         operating_expenses_value = max(gross_profit_value - operating_income_value, 0.0)
 
-    below_operating_value = max(operating_income_value - net_income_value, 0.0)
+    income_before_tax_value = _coerce_number((ixbrl_totals or {}).get("income_before_tax"))
+    income_tax_expense_value = _coerce_number((ixbrl_totals or {}).get("income_tax_expense_benefit"))
+    nonoperating_income_value = _coerce_number((ixbrl_totals or {}).get("nonoperating_income_expense"))
+
+    if income_before_tax_value <= 0 and income_tax_expense_value:
+        income_before_tax_value = net_income_value + income_tax_expense_value
+    if income_before_tax_value <= 0 and nonoperating_income_value:
+        income_before_tax_value = operating_income_value + nonoperating_income_value
+    if income_before_tax_value > 0 and abs(nonoperating_income_value) < 0.5:
+        nonoperating_income_value = income_before_tax_value - operating_income_value
+    if income_before_tax_value > 0 and abs(income_tax_expense_value) < 0.5:
+        income_tax_expense_value = income_before_tax_value - net_income_value
+
+    bridge_tolerance = max(1.0, revenue_value * 0.0005)
+    use_detailed_bridge = (
+        income_before_tax_value > 0
+        and (
+            abs(nonoperating_income_value) > bridge_tolerance
+            or abs(income_tax_expense_value) > bridge_tolerance
+        )
+    )
+    net_adjustment_value = net_income_value - operating_income_value
 
     if (
         revenue_value <= 0
@@ -1928,7 +2004,12 @@ def _build_profit_flow_sankey(
     net_income_name = label("净利润", "Net income")
     cost_of_revenue_name = label("营业成本", "Cost of revenue")
     operating_expenses_name = label("营业费用", "Operating expenses")
-    below_operating_name = label("税项及其他调整", "Taxes and other adjustments")
+    pretax_income_name = label("税前利润", "Pre-tax income")
+    nonoperating_income_name = label("营业外及其他收益", "Non-operating income & other")
+    nonoperating_expense_name = label("营业外及其他支出", "Non-operating expense & other")
+    income_tax_name = label("所得税费用", "Income tax")
+    tax_benefit_name = label("所得税收益", "Tax benefit")
+    below_operating_name = label("税项及其他净调整", "Net below-operating adjustment")
 
     flow_nodes: list[dict[str, object]] = []
     flow_links: list[dict[str, object]] = []
@@ -1992,20 +2073,6 @@ def _build_profit_flow_sankey(
                 "depth": 3,
                 "layout_order": 1,
             },
-            {
-                "name": net_income_name,
-                "value": net_income_value,
-                "item_style_color": "#0f766e",
-                "depth": 4,
-                "layout_order": 0,
-            },
-            {
-                "name": below_operating_name,
-                "value": below_operating_value,
-                "item_style_color": "#f97316",
-                "depth": 4,
-                "layout_order": 1,
-            },
         ]
     )
 
@@ -2015,17 +2082,181 @@ def _build_profit_flow_sankey(
             {"source": total_revenue_name, "target": gross_profit_name, "value": gross_profit_value},
             {"source": gross_profit_name, "target": operating_expenses_name, "value": operating_expenses_value},
             {"source": gross_profit_name, "target": operating_income_name, "value": operating_income_value},
-            {"source": operating_income_name, "target": net_income_name, "value": net_income_value},
         ]
     )
-    if below_operating_value > 0:
-        flow_links.append(
+
+    if use_detailed_bridge:
+        flow_nodes.append(
             {
-                "source": operating_income_name,
-                "target": below_operating_name,
-                "value": below_operating_value,
+                "name": pretax_income_name,
+                "value": income_before_tax_value,
+                "item_style_color": "#10b981",
+                "depth": 4,
+                "layout_order": 0,
             }
         )
+        flow_nodes.append(
+            {
+                "name": net_income_name,
+                "value": net_income_value,
+                "item_style_color": "#0f766e",
+                "depth": 5,
+                "layout_order": 0,
+            }
+        )
+
+        if nonoperating_income_value >= 0:
+            flow_links.append(
+                {
+                    "source": operating_income_name,
+                    "target": pretax_income_name,
+                    "value": operating_income_value,
+                }
+            )
+            if nonoperating_income_value > bridge_tolerance:
+                flow_nodes.append(
+                    {
+                        "name": nonoperating_income_name,
+                        "value": nonoperating_income_value,
+                        "item_style_color": "#38bdf8",
+                        "depth": 4,
+                        "layout_order": 1,
+                    }
+                )
+                flow_links.append(
+                    {
+                        "source": nonoperating_income_name,
+                        "target": pretax_income_name,
+                        "value": nonoperating_income_value,
+                    }
+                )
+        else:
+            nonoperating_expense_value = abs(nonoperating_income_value)
+            flow_nodes.append(
+                {
+                    "name": nonoperating_expense_name,
+                    "value": nonoperating_expense_value,
+                    "item_style_color": "#f97316",
+                    "depth": 4,
+                    "layout_order": 1,
+                }
+            )
+            flow_links.extend(
+                [
+                    {
+                        "source": operating_income_name,
+                        "target": pretax_income_name,
+                        "value": income_before_tax_value,
+                    },
+                    {
+                        "source": operating_income_name,
+                        "target": nonoperating_expense_name,
+                        "value": nonoperating_expense_value,
+                    },
+                ]
+            )
+
+        if income_tax_expense_value >= 0:
+            flow_links.append(
+                {
+                    "source": pretax_income_name,
+                    "target": net_income_name,
+                    "value": net_income_value,
+                }
+            )
+            if income_tax_expense_value > bridge_tolerance:
+                flow_nodes.append(
+                    {
+                        "name": income_tax_name,
+                        "value": income_tax_expense_value,
+                        "item_style_color": "#fb923c",
+                        "depth": 5,
+                        "layout_order": 1,
+                    }
+                )
+                flow_links.append(
+                    {
+                        "source": pretax_income_name,
+                        "target": income_tax_name,
+                        "value": income_tax_expense_value,
+                    }
+                )
+        else:
+            tax_benefit_value = abs(income_tax_expense_value)
+            flow_links.append(
+                {
+                    "source": pretax_income_name,
+                    "target": net_income_name,
+                    "value": income_before_tax_value,
+                }
+            )
+            flow_nodes.append(
+                {
+                    "name": tax_benefit_name,
+                    "value": tax_benefit_value,
+                    "item_style_color": "#34d399",
+                    "depth": 5,
+                    "layout_order": 1,
+                }
+            )
+            flow_links.append(
+                {
+                    "source": tax_benefit_name,
+                    "target": net_income_name,
+                    "value": tax_benefit_value,
+                }
+            )
+    else:
+        flow_nodes.extend(
+            [
+                {
+                    "name": net_income_name,
+                    "value": net_income_value,
+                    "item_style_color": "#0f766e",
+                    "depth": 4,
+                    "layout_order": 0,
+                },
+                {
+                    "name": below_operating_name,
+                    "value": abs(net_adjustment_value),
+                    "item_style_color": "#f97316",
+                    "depth": 4,
+                    "layout_order": 1,
+                },
+            ]
+        )
+        if net_adjustment_value >= 0:
+            flow_links.append(
+                {
+                    "source": operating_income_name,
+                    "target": net_income_name,
+                    "value": operating_income_value,
+                }
+            )
+            if net_adjustment_value > bridge_tolerance:
+                flow_links.append(
+                    {
+                        "source": below_operating_name,
+                        "target": net_income_name,
+                        "value": net_adjustment_value,
+                    }
+                )
+        else:
+            below_operating_value = abs(net_adjustment_value)
+            flow_links.extend(
+                [
+                    {
+                        "source": operating_income_name,
+                        "target": net_income_name,
+                        "value": net_income_value,
+                    },
+                    {
+                        "source": operating_income_name,
+                        "target": below_operating_name,
+                        "value": below_operating_value,
+                    },
+                ]
+            )
 
     source_snippet = (
         segment_flow.get("source_label")
@@ -2060,7 +2291,7 @@ def _build_profit_flow_sankey(
         "series": [],
         "flow_nodes": flow_nodes,
         "flow_links": flow_links,
-        "palette": ["#111111", "#22c55e", "#16a34a", "#0f766e", "#ef4444", "#f97316"],
+        "palette": ["#111111", "#22c55e", "#16a34a", "#0f766e", "#ef4444", "#f97316", "#38bdf8", "#fb923c"],
         "source_snippet": source_snippet,
         "confidence": "high" if segment_nodes else "medium",
     }
@@ -2268,6 +2499,14 @@ def _period_labels_from_snapshot(
         return "Prior period", period
     fallback_text = str(fallback or "").strip()
     return "Prior period", fallback_text or "Current period"
+
+
+def _compact_period_label(period: str) -> str:
+    text = str(period or "").strip()
+    year_match = re.search(r"(20\d{2})", text)
+    if year_match:
+        return year_match.group(1)
+    return text or "Current period"
 
 
 def _chart_source_from_metrics(

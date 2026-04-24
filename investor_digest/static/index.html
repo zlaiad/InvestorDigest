@@ -111,38 +111,51 @@
         </div>
 
         <article id="report-content" class="report-content hidden">
-          <section class="summary-hero-card">
-            <div class="summary-company-card">
-              <div class="company-avatar" id="company-avatar">ID</div>
-              <div class="company-copy">
-                <div class="summary-company-line">
-                  <h3 id="summary-company-title">等待生成报告</h3>
-                  <span class="summary-ticker-chip" id="meta-company"></span>
+          <section class="report-cover panel-surface">
+            <div class="report-cover-topline">
+              <p class="toolbar-label">Investor Digest</p>
+              <p id="generated-at" class="cover-generated-at">基于结构化财务事实与文本模块解读生成</p>
+            </div>
+
+            <div class="report-cover-main">
+              <div class="summary-company-card">
+                <div class="company-avatar" id="company-avatar">ID</div>
+                <div class="company-copy">
+                  <div class="summary-company-line">
+                    <h3 id="summary-company-title">等待生成报告</h3>
+                    <span class="summary-ticker-chip" id="meta-company"></span>
+                  </div>
+                  <p class="summary-period-line">
+                    <strong id="meta-period"></strong>
+                    <span id="meta-audience"></span>
+                  </p>
+                  <div class="summary-tags">
+                    <span>结构化财务提取</span>
+                    <span>证据追溯</span>
+                    <span>普通投资者可读</span>
+                  </div>
                 </div>
-                <p class="summary-period-line">
-                  <strong id="meta-period"></strong>
-                  <span id="meta-audience"></span>
-                </p>
-                <div class="summary-tags">
-                  <span>结构化财务提取</span>
-                  <span>证据追溯</span>
-                  <span>普通投资者可读</span>
-                </div>
+              </div>
+
+              <div class="cover-art" aria-hidden="true">
+                <div class="cover-art-orb cover-art-orb-a"></div>
+                <div class="cover-art-orb cover-art-orb-b"></div>
+                <div class="cover-art-lines"></div>
               </div>
             </div>
 
-            <div class="summary-divider"></div>
-
-            <div class="summary-takeaway-card">
+            <div class="cover-takeaway-card">
               <div class="summary-takeaway-head">
                 <div>
                   <p class="toolbar-label">一句话结论</p>
-                  <p class="summary-runtime-note" id="generated-at">基于结构化财务事实与文本模块解读生成</p>
+                  <p class="summary-runtime-note">面向普通投资者的年度财报摘要</p>
                 </div>
               </div>
               <h3 id="takeaway"></h3>
               <div id="overview" class="overview-copy"></div>
             </div>
+
+            <div id="cover-pill-grid" class="cover-pill-grid"></div>
           </section>
 
           <section class="facts-section">
@@ -151,6 +164,13 @@
               <p>与去年同期对比</p>
             </div>
             <div id="fact-grid" class="fact-grid"></div>
+            <details id="more-facts-panel" class="more-facts-panel hidden">
+              <summary>
+                <span>更多指标</span>
+                <small id="more-facts-count"></small>
+              </summary>
+              <div id="more-fact-grid" class="more-fact-grid"></div>
+            </details>
           </section>
 
           <section class="analysis-dashboard">
@@ -159,12 +179,10 @@
               <p>先看利润形成路径，再看趋势和结构。</p>
             </div>
 
-            <div id="featured-chart-grid" class="featured-chart-grid"></div>
+            <div class="featured-stage">
+              <div id="featured-chart-grid" class="featured-chart-grid"></div>
 
-            <div class="analysis-lower">
-              <div id="charts-grid" class="charts-grid"></div>
-
-              <aside class="dashboard-side">
+              <aside class="dashboard-side spotlight-rail">
                 <div class="panel-surface side-panel">
                   <div class="section-heading compact">
                     <h3>投资者视角</h3>
@@ -185,7 +203,13 @@
                   </div>
                   <ul id="positives" class="bullet-list"></ul>
                 </div>
+              </aside>
+            </div>
 
+            <div class="analysis-lower">
+              <div id="charts-grid" class="charts-grid"></div>
+
+              <aside class="dashboard-side context-rail">
                 <div class="panel-surface side-panel">
                   <div class="section-heading compact">
                     <h3>主要风险</h3>
@@ -203,36 +227,65 @@
             </div>
           </section>
 
-          <section class="bottom-grid">
-            <div class="panel-surface bottom-panel">
+          <section class="summary-band">
+            <div class="panel-surface summary-panel">
               <div class="section-heading compact">
-                <h3>原文证据与数据来源</h3>
+                <h3>给普通投资者的话</h3>
               </div>
-              <div id="evidence-grid" class="evidence-grid"></div>
+              <div id="plain-language-summary" class="overview-copy plain-language-card"></div>
             </div>
 
-            <div class="panel-surface bottom-panel">
+            <div class="panel-surface glossary-panel">
               <div class="section-heading compact">
-                <h3>通俗总结</h3>
+                <h3>术语速览</h3>
               </div>
               <div id="glossary" class="glossary-grid"></div>
             </div>
           </section>
 
           <section class="footer-panels">
-            <div class="panel-surface">
+            <div class="panel-surface themed-panel themed-observation">
               <div class="section-heading compact">
                 <h3>数据与解读提醒</h3>
               </div>
               <ul id="warnings" class="warning-list"></ul>
-              <div id="disclaimer" class="disclaimer-box"></div>
             </div>
 
-            <details class="raw-panel">
-              <summary>查看原始 JSON</summary>
-              <pre id="raw-json"></pre>
-            </details>
+            <div class="panel-surface themed-panel themed-neutral">
+              <div class="section-heading compact">
+                <h3>使用说明</h3>
+              </div>
+              <div id="disclaimer" class="disclaimer-box"></div>
+            </div>
           </section>
+
+          <section class="appendix-section panel-surface">
+            <div class="section-heading compact">
+              <h3>附录：原文证据与数据来源</h3>
+              <p>作为正文结论的补充依据</p>
+            </div>
+            <div id="evidence-grid" class="evidence-grid"></div>
+          </section>
+
+          <details class="raw-panel">
+            <summary>查看原始 JSON</summary>
+            <pre id="raw-json"></pre>
+          </details>
+
+          <footer class="report-footer">
+            <div class="report-footer-brand">
+              <span class="brand-mark">◔</span>
+              <div>
+                <strong>Investor Digest</strong>
+                <p>让长篇财报变成可读、可视、可追溯的投资者摘要。</p>
+              </div>
+            </div>
+            <div class="report-footer-meta">
+              <span>生成时间：<strong id="footer-generated-at">--</strong></span>
+              <span>数据来源：公开 10-K / XBRL 披露</span>
+              <span>输出仅供学习展示，不构成投资建议</span>
+            </div>
+          </footer>
         </article>
       </main>
     </div>
