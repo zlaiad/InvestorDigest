@@ -1,1188 +1,922 @@
-const state = {
-  digest: null,
-  charts: [],
-  chartObservers: [],
-  progressTimer: null,
-  progressValue: 0,
+const chartInstances = new Map();
+let selectedFile = null;
+let progressTimer = null;
+let echartsReadyPromise = null;
+let currentDigest = null;
+
+const palette = {
+  blue: "#3f6ff4",
+  blueSoft: "#8bb0ff",
+  green: "#23b36b",
+  greenDark: "#0f8075",
+  red: "#ef4444",
+  orange: "#f97316",
+  purple: "#7867d9",
+  gray: "#9aa4b5",
+  grid: "rgba(19, 36, 64, 0.08)",
+  text: "#132440",
+  muted: "#74809a",
 };
 
-const runtimeModelEl = document.getElementById("runtime-model");
-const runtimeStatusEl = document.getElementById("runtime-status");
-const statusStripEl = document.getElementById("status-strip");
-const statusTextEl = document.getElementById("status-text");
-const statusPercentEl = document.getElementById("status-percent");
-const statusProgressFillEl = document.getElementById("status-progress-fill");
-const pathInputEl = document.getElementById("path-input");
-const audienceEl = document.getElementById("audience");
-const languageEl = document.getElementById("language");
-const analysisFormEl = document.getElementById("analysis-form");
-const fileInputEl = document.getElementById("file-input");
-const uploadZoneEl = document.getElementById("upload-zone");
-const fileNameEl = document.getElementById("file-name");
-const generateButtonEl = document.getElementById("generate-button");
-const reportTitleEl = document.getElementById("report-title");
-const reportContentEl = document.getElementById("report-content");
-const emptyStateEl = document.getElementById("empty-state");
-const downloadJsonEl = document.getElementById("download-json");
-const printReportEl = document.getElementById("print-report");
-const summaryCompanyTitleEl = document.getElementById("summary-company-title");
-const companyAvatarEl = document.getElementById("company-avatar");
-
-const ANALYSIS_PROGRESS_STEPS = [
-  { percent: 8, message: "正在读取文件和基础元数据…" },
-  { percent: 24, message: "正在抽取关键章节与财务事实…" },
-  { percent: 46, message: "正在整理重点风险与亮点…" },
-  { percent: 68, message: "正在生成投资者可读摘要…" },
-  { percent: 86, message: "正在整理图表、术语和提示…" },
-  { percent: 94, message: "正在完成最终报告排版…" },
+const metricOrder = [
+  "revenue",
+  "gross_profit",
+  "operating_income",
+  "net_income",
+  "gross_margin",
+  "operating_margin",
+  "diluted_eps",
+  "operating_cash_flow",
+  "free_cash_flow",
+  "cash_and_equivalents",
 ];
 
-analysisFormEl.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const [file] = fileInputEl.files;
-  const path = pathInputEl.value.trim();
-  const audience = audienceEl.value.trim() || "普通投资者";
-  const language = languageEl.value;
+const miniMetricOrder = [
+  "revenue",
+  "gross_profit",
+  "gross_margin",
+  "net_income",
+  "diluted_eps",
+];
 
-  if (file) {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("audience", audience);
-    formData.append("language", language);
+const iconByMetric = {
+  revenue: "▣",
+  gross_profit: "%",
+  operating_income: "↗",
+  net_income: "◆",
+  gross_margin: "%",
+  operating_margin: "◌",
+  diluted_eps: "$",
+  operating_cash_flow: "↔",
+  free_cash_flow: "▥",
+  cash_and_equivalents: "●",
+};
 
-    await runAnalysis({
-      endpoint: "/api/analyze/file",
-      options: {
-        method: "POST",
-        body: formData,
-      },
-      label: `正在分析上传文件: ${file.name}`,
-    });
-    return;
+function $(id) {
+  return document.getElementById(id);
+}
+
+function numberLabel(value, digits = 0) {
+  if (!Number.isFinite(value)) {
+    return "--";
   }
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: digits }).format(value);
+}
 
-  if (!path) {
-    setStatus("请输入财报路径或上传文件。");
-    return;
+function baseGrid(extra = {}) {
+  return {
+    top: 36,
+    right: 24,
+    bottom: 36,
+    left: 54,
+    containLabel: false,
+    ...extra,
+  };
+}
+
+function clearCharts() {
+  chartInstances.forEach((chart) => chart.dispose());
+  chartInstances.clear();
+}
+
+function initChart(id, option) {
+  const target = $(id);
+  if (!target) {
+    return null;
   }
+  if (typeof echarts === "undefined") {
+    target.innerHTML = '<div class="chart-placeholder">图表库加载失败，文字报告仍可阅读。</div>';
+    return null;
+  }
+  const existing = chartInstances.get(id);
+  if (existing) {
+    existing.dispose();
+  }
+  const chart = echarts.init(target, null, { renderer: "canvas" });
+  chart.setOption(option);
+  chartInstances.set(id, chart);
+  return chart;
+}
 
-  await runAnalysis({
-    endpoint: "/api/analyze/path",
-    options: {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        path,
-        audience,
-        language,
-      }),
-    },
-    label: `正在分析路径: ${path}`,
+function ensureEcharts() {
+  if (typeof echarts !== "undefined") {
+    return Promise.resolve();
+  }
+  if (echartsReadyPromise) {
+    return echartsReadyPromise;
+  }
+  echartsReadyPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-chart-lib="echarts"]');
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js";
+    script.async = true;
+    script.dataset.chartLib = "echarts";
+    script.addEventListener("load", resolve, { once: true });
+    script.addEventListener("error", () => reject(new Error("ECharts failed to load")), { once: true });
+    document.head.append(script);
   });
-});
+  return echartsReadyPromise;
+}
 
-uploadZoneEl.addEventListener("click", (event) => {
-  event.preventDefault();
-  fileInputEl.click();
-});
-
-uploadZoneEl.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" && event.key !== " ") {
-    return;
+function setText(id, value) {
+  const target = $(id);
+  if (target) {
+    target.textContent = value ?? "";
   }
-  event.preventDefault();
-  fileInputEl.click();
-});
+}
 
-fileInputEl.addEventListener("change", () => {
-  const [file] = fileInputEl.files;
-  if (!file) {
-    fileNameEl.textContent = "支持 PDF / HTML / TXT";
-    setProgress(0, "idle");
-    return;
+function setProgress(text, percent, tone = "idle") {
+  setText("status-text", text);
+  setText("status-percent", `${Math.round(percent)}%`);
+  const fill = $("status-progress-fill");
+  if (fill) {
+    fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    fill.dataset.tone = tone;
   }
+}
 
-  fileNameEl.textContent = file.name;
-  setProgress(0, "idle");
-  setStatus(`已选择文件: ${file.name}`);
-});
-
-downloadJsonEl.addEventListener("click", () => {
-  if (!state.digest) {
-    return;
+function stopProgressTimer() {
+  if (progressTimer) {
+    window.clearInterval(progressTimer);
+    progressTimer = null;
   }
+}
 
-  const blob = new Blob([JSON.stringify(state.digest, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  const company = (state.digest.company_name || "report").replace(/[^\w-]+/g, "_");
-  anchor.href = url;
-  anchor.download = `${company}_${state.digest.reporting_period || "digest"}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-});
+function startProgressTimer() {
+  stopProgressTimer();
+  let current = 8;
+  setProgress("正在读取财报并提取关键模块...", current, "busy");
+  progressTimer = window.setInterval(() => {
+    current = Math.min(92, current + Math.max(1, (94 - current) * 0.08));
+    setProgress("正在提取财务数据、风险段落并生成投资者摘要...", current, "busy");
+  }, 900);
+}
 
-printReportEl.addEventListener("click", () => window.print());
-
-async function detectRuntime() {
+async function checkRuntime() {
   try {
     const response = await fetch("/health");
     if (!response.ok) {
-      throw new Error(`health ${response.status}`);
+      throw new Error(`HTTP ${response.status}`);
     }
-    const payload = await response.json();
-    runtimeModelEl.textContent = payload.model || "unknown";
-    runtimeStatusEl.textContent = "分析服务已连接";
+    const data = await response.json();
+    setText("runtime-model", data.model || "analysis service");
+    setText("runtime-status", "分析服务已连接，可以上传或输入财报路径。");
   } catch (error) {
-    runtimeModelEl.textContent = "离线";
-    runtimeStatusEl.textContent = "当前服务未响应";
+    setText("runtime-model", "未连接");
+    setText("runtime-status", "后端服务不可用，请先启动 API 服务。");
   }
 }
 
-async function runAnalysis({ endpoint, options, label }) {
-  startProgress(label);
-  toggleBusy(true);
-  try {
-    const response = await fetch(endpoint, options);
-    const payload = await response.json();
-    if (!response.ok) {
-      const detail = payload.detail || "分析失败";
-      throw new Error(detail);
-    }
-
-    state.digest = payload;
-    renderDigest(payload);
-    finishProgress("报告已生成。你可以继续上传其他文件，或直接打印当前报告。", "success");
-  } catch (error) {
-    console.error(error);
-    finishProgress(`生成失败: ${error.message}`, "error");
-  } finally {
-    toggleBusy(false);
-  }
-}
-
-function setStatus(message) {
-  statusTextEl.textContent = message;
-}
-
-function setProgress(value, stateName = "idle") {
-  state.progressValue = Math.max(0, Math.min(100, Math.round(value)));
-  statusPercentEl.textContent = `${state.progressValue}%`;
-  statusProgressFillEl.style.width = `${state.progressValue}%`;
-  statusStripEl.dataset.state = stateName;
-}
-
-function clearProgressTimer() {
-  if (!state.progressTimer) {
+function setLoading(isLoading) {
+  const button = $("generate-button");
+  if (!button) {
     return;
   }
-
-  window.clearInterval(state.progressTimer);
-  state.progressTimer = null;
+  button.disabled = isLoading;
+  button.textContent = isLoading ? "生成中..." : "生成报告";
 }
 
-function startProgress(initialMessage) {
-  clearProgressTimer();
-  setStatus(initialMessage);
-  setProgress(3, "running");
+async function requestDigest() {
+  const path = $("path-input")?.value.trim() || "";
+  const audience = $("audience")?.value.trim() || "普通投资者";
+  const language = $("language")?.value || "zh-Hans";
 
-  let stepIndex = 0;
-  state.progressTimer = window.setInterval(() => {
-    const step = ANALYSIS_PROGRESS_STEPS[Math.min(stepIndex, ANALYSIS_PROGRESS_STEPS.length - 1)];
-    const nextValue = Math.max(state.progressValue + 1, step.percent);
-    setStatus(step.message);
-    setProgress(Math.min(nextValue, 95), "running");
-    if (stepIndex < ANALYSIS_PROGRESS_STEPS.length - 1) {
-      stepIndex += 1;
+  if (!selectedFile && !path) {
+    throw new Error("请先上传 10-K 财报文件，或输入本地财报路径。");
+  }
+
+  if (selectedFile) {
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    formData.append("audience", audience);
+    formData.append("language", language);
+    return postDigest("/api/analyze/file", { method: "POST", body: formData });
+  }
+
+  return postDigest("/api/analyze/path", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, audience, language }),
+  });
+}
+
+async function postDigest(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    let detail = await response.text();
+    try {
+      const payload = JSON.parse(detail);
+      detail = payload.detail || payload.error || detail;
+    } catch {
+      // Keep raw server text.
     }
-  }, 2400);
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  return response.json();
 }
 
-function finishProgress(message, stateName) {
-  clearProgressTimer();
-  setStatus(message);
-  setProgress(100, stateName);
+async function handleGenerate(event) {
+  event.preventDefault();
+  setLoading(true);
+  currentDigest = null;
+  setReportActionsEnabled(false);
+  startProgressTimer();
+
+  try {
+    const chartLibraryReady = ensureEcharts().catch(() => null);
+    const digest = await requestDigest();
+    await chartLibraryReady;
+    stopProgressTimer();
+    setProgress("报告生成完成。", 100, "done");
+    currentDigest = digest;
+    renderDigest(digest);
+    setReportActionsEnabled(true);
+    $("empty-state")?.classList.add("hidden");
+    $("report-content")?.classList.remove("hidden");
+    $("report-content")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    stopProgressTimer();
+    setProgress(`生成失败：${error.message}`, 100, "error");
+  } finally {
+    setLoading(false);
+  }
 }
 
-function toggleBusy(isBusy) {
-  document.body.dataset.busy = String(isBusy);
-  generateButtonEl.disabled = isBusy;
-  fileInputEl.disabled = isBusy;
-  pathInputEl.disabled = isBusy;
-  audienceEl.disabled = isBusy;
-  languageEl.disabled = isBusy;
-  uploadZoneEl.disabled = isBusy;
+function factMap(digest) {
+  return Object.fromEntries((digest.fact_snapshot || []).map((item) => [item.metric_key, item]));
+}
+
+function chartByType(digest, type) {
+  return (digest.chart_specs || []).find((chart) => chart.chart_type === type);
+}
+
+function isAppleDigest(digest) {
+  const name = `${digest.company_name || ""}`.toLowerCase();
+  return name.includes("apple") || name.includes("aapl") || name.includes("苹果");
+}
+
+function extractYear(period) {
+  const matches = `${period || ""}`.match(/20\d{2}/g);
+  return matches ? matches[matches.length - 1] : new Date().getFullYear().toString();
+}
+
+function formatPeriod(period) {
+  const text = `${period || ""}`.trim();
+  const date = new Date(text);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toISOString().slice(0, 10).replaceAll("-", ".");
+  }
+  return text || "--";
+}
+
+function companyInitials(companyName) {
+  const clean = `${companyName || "Company"}`.replace(/[^a-zA-Z0-9\u4e00-\u9fa5 ]/g, " ");
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    return "F";
+  }
+  return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+}
+
+function cleanYoy(text) {
+  return `${text || ""}`.replace(/\s*·\s*/g, "，").trim() || "--";
+}
+
+function signedClass(text) {
+  return `${text || ""}`.includes("-") ? "negative" : "";
+}
+
+function parseMoneyToMillions(text) {
+  const raw = `${text || ""}`.replace(/,/g, "").trim();
+  const match = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!match) {
+    return null;
+  }
+  const value = Number(match[0]);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (/B\b/i.test(raw)) {
+    return value * 1000;
+  }
+  if (/T\b/i.test(raw)) {
+    return value * 1000000;
+  }
+  return value;
+}
+
+function formatMillion(value) {
+  return numberLabel(value, Math.abs(value) < 1000 ? 1 : 0);
+}
+
+function metricValue(facts, key) {
+  return parseMoneyToMillions(facts[key]?.value_text);
 }
 
 function renderDigest(digest) {
-  const generatedAtText = `报告生成时间：${new Date().toLocaleString("zh-Hans-CN", {
-    hour12: false,
-  })}`;
-  reportTitleEl.textContent = digest.company_name;
-  summaryCompanyTitleEl.textContent = digest.company_name;
-  document.getElementById("meta-company").textContent = digest.ticker || "10-K";
-  document.getElementById("meta-period").textContent = digest.reporting_period;
-  document.getElementById("meta-audience").textContent = digest.audience;
-  companyAvatarEl.textContent = buildCompanyAvatar(digest.company_name);
-  document.getElementById("generated-at").textContent = generatedAtText;
-  document.getElementById("footer-generated-at").textContent = generatedAtText.replace(/^报告生成时间：/u, "");
-  document.getElementById("takeaway").textContent = digest.one_sentence_takeaway;
-  document.getElementById("overview").innerHTML = marked.parse(
-    digest.overview_markdown || ""
-  );
-  document.getElementById("investor-view").innerHTML = marked.parse(
-    digest.investor_view_markdown || ""
-  );
+  clearCharts();
+  const facts = factMap(digest);
+  const lineChart = chartByType(digest, "line");
+  const waterfallChart = chartByType(digest, "waterfall");
+  const sankeyChart = chartByType(digest, "sankey");
+  const apple = isAppleDigest(digest);
+  const year = extractYear(digest.reporting_period);
+  const companyName = digest.company_name || "Unknown Company";
 
-  fillFactSnapshot(digest.fact_snapshot || []);
-  fillCoverPills(digest.fact_snapshot || []);
-  fillPlainLanguageSummary(digest);
-  fillList("key-points", digest.key_points);
-  fillList("positives", digest.positives);
-  fillList("risks", digest.risks);
-  fillList("watchlist", digest.watchlist);
-  fillWarnings(digest.warnings);
-  fillGlossary(digest.glossary);
-  fillEvidenceCards(digest.evidence_cards || []);
+  renderHero(digest, apple, year, companyName);
+  renderRevenueOverview(digest, facts, lineChart, year, companyName);
+  renderMiniKpis(facts);
+  renderProfitFlow(facts, sankeyChart);
+  renderCashSection(facts, waterfallChart);
+  renderRiskGrid(digest);
+  renderDashboard(digest, facts, lineChart, sankeyChart, apple);
 
-  document.getElementById("disclaimer").textContent = digest.risk_disclaimer || "";
-  document.getElementById("raw-json").textContent = JSON.stringify(digest, null, 2);
-
-  emptyStateEl.classList.add("hidden");
-  reportContentEl.classList.remove("hidden");
-  renderCharts(digest.chart_specs || []);
-  downloadJsonEl.disabled = false;
-  printReportEl.disabled = false;
+  window.setTimeout(() => chartInstances.forEach((chart) => chart.resize()), 80);
 }
 
-function fillFactSnapshot(items = []) {
-  const target = document.getElementById("fact-grid");
-  const morePanel = document.getElementById("more-facts-panel");
-  const moreTarget = document.getElementById("more-fact-grid");
-  const moreCount = document.getElementById("more-facts-count");
-  target.innerHTML = "";
-  moreTarget.innerHTML = "";
-  morePanel.classList.add("hidden");
-  if (!items.length) {
-    target.innerHTML = `
-      <article class="fact-card empty-card">
-        <h4>当前没有事实卡片</h4>
-        <p>本轮输出没有足够稳定的结构化指标。</p>
-      </article>
-    `;
-    return;
-  }
-
-  const { primary, secondary } = splitFactItems(items);
-
-  primary.forEach((item) => {
-    target.appendChild(buildFactCard(item, "primary"));
-  });
-
-  if (secondary.length) {
-    morePanel.classList.remove("hidden");
-    moreCount.textContent = `${secondary.length} 项`;
-    secondary.forEach((item) => {
-      moreTarget.appendChild(buildFactCard(item, "secondary"));
-    });
-  }
+function renderHero(digest, apple, year, companyName) {
+  setText("hero-mark", apple ? "" : companyInitials(companyName));
+  setText("hero-title", `${apple ? "苹果公司" : companyName} ${year} 财年报告解析`);
+  setText("hero-subtitle", `Annual Report Analysis ${year}`);
+  setText(
+    "hero-description",
+    `深入解读 ${companyName} ${year} 财年业绩表现、财务状况与未来展望`
+  );
+  setText("hero-period", `报告期间：${formatPeriod(digest.reporting_period)}`);
+  $("hero-visual")?.classList.toggle("is-generic", !apple);
 }
 
-function fillCoverPills(items = []) {
-  const target = document.getElementById("cover-pill-grid");
-  target.innerHTML = "";
-  if (!items.length) {
+function renderRevenueOverview(digest, facts, chartSpec, year, companyName) {
+  const revenue = facts.revenue;
+  const revenueText = revenue?.value_text || "--";
+  const yoy = cleanYoy(revenue?.yoy_text);
+  setText(
+    "revenue-section-copy",
+    `${year} 财年${companyName}营收达 ${revenueText}，${yoy}。`
+  );
+  setText("revenue-total-label", "营收总额");
+  setText("revenue-total-value", revenueText);
+  setText("revenue-total-yoy", firstYoyPart(revenue?.yoy_text));
+  setText("revenue-chart-title", chartSpec?.title || "收入与利润趋势（百万美元）");
+  renderRevenueLegend(chartSpec);
+  renderRevenueLine(chartSpec, facts);
+}
+
+function firstYoyPart(text) {
+  const clean = `${text || ""}`.split("·")[0].trim();
+  return clean.replace("同比", "") || "--";
+}
+
+function renderRevenueLegend(chartSpec) {
+  const target = $("revenue-chart-legend");
+  if (!target) {
     return;
   }
-
-  const priority = [
-    "revenue",
-    "net_income",
-    "operating_cash_flow",
-    "operating_income",
-    "diluted_eps",
-    "free_cash_flow",
-    "gross_margin",
-    "operating_margin",
-  ];
-  const rank = new Map(priority.map((key, index) => [key, index]));
-  const selected = [...items]
-    .sort((a, b) => {
-      const aRank = rank.has(a.metric_key) ? rank.get(a.metric_key) : 99;
-      const bRank = rank.has(b.metric_key) ? rank.get(b.metric_key) : 99;
-      return aRank - bRank;
-    })
-    .slice(0, 3);
-
-  selected.forEach((item) => {
-    const trend = parseFactTrend(item.yoy_text || "");
-    const performance = formatPerformanceBadgeForMetric(item);
-    const pill = document.createElement("article");
-    pill.className = `cover-pill ${trend.yoy.tone}`;
-    pill.innerHTML = `
-      <div class="cover-pill-head">
-        <span class="cover-pill-label">${escapeHtml(item.label)}</span>
-        <span class="cover-pill-confidence ${escapeHtml(performance.className)}">${escapeHtml(performance.label)}</span>
-      </div>
-      <strong>${escapeHtml(item.value_text)}</strong>
-      <div class="cover-pill-meta">
-        <span>${escapeHtml(trend.yoy.label)} ${escapeHtml(trend.yoy.value)}</span>
-        <span>${escapeHtml(trend.change.label)} ${escapeHtml(trend.change.value)}</span>
-      </div>
-    `;
-    target.appendChild(pill);
+  target.innerHTML = "";
+  const series = chartSpec?.series?.length ? chartSpec.series.slice(0, 3) : [{ name: "营业收入" }];
+  series.forEach((item, index) => {
+    const label = document.createElement("span");
+    const dot = document.createElement("i");
+    dot.className = "dot";
+    dot.style.background = chartColor(index);
+    label.append(dot, item.name);
+    target.append(label);
   });
 }
 
-function fillPlainLanguageSummary(digest) {
-  const target = document.getElementById("plain-language-summary");
-  const content =
-    digest.investor_view_markdown ||
-    digest.overview_markdown ||
-    digest.one_sentence_takeaway ||
-    "";
+function renderRevenueLine(chartSpec, facts) {
+  const categories = chartSpec?.categories?.length ? chartSpec.categories : ["上一期", "本期"];
+  const series = chartSpec?.series?.length
+    ? chartSpec.series
+    : [
+        {
+          name: "营业收入",
+          values: [metricValue(facts, "revenue") || 0, metricValue(facts, "revenue") || 0],
+        },
+      ];
 
-  if (!content.trim()) {
-    target.innerHTML = "<p>当前没有可展示的通俗总结。</p>";
-    return;
-  }
-
-  target.innerHTML = marked.parse(content);
+  initChart("revenue-line-chart", {
+    color: series.map((_, index) => chartColor(index)),
+    tooltip: { trigger: "axis" },
+    grid: baseGrid({ top: 28, left: 52, right: 20, bottom: 32 }),
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: categories,
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: "#d5dbe7" } },
+      axisLabel: { color: palette.muted, fontWeight: 600 },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: palette.muted, formatter: numberLabel },
+      splitLine: { lineStyle: { color: palette.grid } },
+    },
+    series: series.map((item, index) => ({
+      name: item.name,
+      type: "line",
+      smooth: true,
+      symbol: "circle",
+      symbolSize: 7,
+      lineStyle: { width: index === 0 ? 4 : 3 },
+      data: item.values || [],
+    })),
+  });
 }
 
-function splitFactItems(items) {
-  const priority = [
-    "revenue",
-    "gross_profit",
-    "operating_income",
-    "net_income",
-    "diluted_eps",
-    "operating_cash_flow",
-  ];
-  const rank = new Map(priority.map((key, index) => [key, index]));
-  const sorted = [...items].sort((a, b) => {
-    const aRank = rank.has(a.metric_key) ? rank.get(a.metric_key) : 99;
-    const bRank = rank.has(b.metric_key) ? rank.get(b.metric_key) : 99;
-    if (aRank !== bRank) {
-      return aRank - bRank;
+function renderMiniKpis(facts) {
+  const target = $("mini-kpis");
+  if (!target) {
+    return;
+  }
+  target.innerHTML = "";
+  pickFacts(facts, miniMetricOrder, 5).forEach((fact, index) => {
+    target.append(createMetricCard(fact, index, "mini"));
+  });
+}
+
+function pickFacts(facts, order, limit) {
+  const seen = new Set();
+  const picked = [];
+  order.forEach((key) => {
+    if (facts[key]) {
+      picked.push(facts[key]);
+      seen.add(key);
     }
-    return 0;
   });
-  return {
-    primary: sorted.slice(0, 6),
-    secondary: sorted.slice(6),
-  };
+  Object.values(facts).forEach((fact) => {
+    if (!seen.has(fact.metric_key)) {
+      picked.push(fact);
+    }
+  });
+  return picked.slice(0, limit);
 }
 
-function buildFactCard(item, variant = "primary") {
-  const trend = parseFactTrend(item.yoy_text || "");
-  const performance = formatPerformanceBadgeForMetric(item);
+function createMetricCard(fact, index, size = "mini") {
   const card = document.createElement("article");
-  card.className = `fact-card fact-card-${variant}`;
-  card.innerHTML = `
-    <div class="fact-card-header">
-      <p class="card-kicker">${escapeHtml(item.label)}</p>
-      <span class="confidence-pill ${escapeHtml(performance.className)}">${escapeHtml(performance.label)}</span>
-    </div>
-    <h4>${escapeHtml(item.value_text)}</h4>
-    <div class="fact-trend">
-      <div class="fact-trend-row ${trend.yoy.tone}">
-        <span class="fact-trend-label">${escapeHtml(trend.yoy.label)}</span>
-        <span class="fact-trend-value">${escapeHtml(trend.yoy.value)}</span>
-      </div>
-      <div class="fact-trend-row ${trend.change.tone}">
-        <span class="fact-trend-label">${escapeHtml(trend.change.label)}</span>
-        <span class="fact-trend-value">${escapeHtml(trend.change.value)}</span>
-      </div>
-    </div>
-  `;
+  const icon = document.createElement("span");
+  icon.className = `mini-icon ${iconTone(index, fact.metric_key)}`;
+  icon.textContent = iconByMetric[fact.metric_key] || "◆";
+
+  const body = document.createElement("span");
+  const label = document.createElement("p");
+  const value = document.createElement("strong");
+  const change = document.createElement("em");
+  label.textContent = fact.label || fact.metric_key;
+  value.textContent = fact.value_text || "--";
+  change.textContent = size === "dashboard" ? firstYoyPart(fact.yoy_text) : firstYoyPart(fact.yoy_text);
+  change.className = signedClass(fact.yoy_text);
+  body.append(label, value, change);
+  card.append(icon, body);
   return card;
 }
 
-function parseFactTrend(text) {
-  const parts = String(text || "")
-    .split("·")
-    .map((part) => part.trim())
-    .filter(Boolean);
+function iconTone(index, metricKey) {
+  if (metricKey?.includes("margin") || metricKey?.includes("profit")) {
+    return "green";
+  }
+  if (metricKey?.includes("cash")) {
+    return "purple";
+  }
+  return ["app", "green", "orange", "purple", "muted"][index % 5];
+}
 
-  const yoyPart = parts.find((part) => part.startsWith("同比")) || "";
-  const changePart = parts.find((part) => part.startsWith("变化")) || "";
+function renderProfitFlow(facts, sankeyChart) {
+  const metrics = flowMetrics(facts, sankeyChart);
+  const base = metrics.revenue || 1;
+
+  setText("profit-flow-title", `利润流向（${extractYearFromFlow(sankeyChart)}年，百万美元）`);
+  setFlowNode("flow-revenue", "营收", metrics.revenue, base);
+  setFlowNode("flow-gross", "毛利润", metrics.gross, base);
+  setFlowNode("flow-cost", "营业成本", metrics.cost, base);
+  setFlowNode("flow-operating", "营业利润", metrics.operating, base);
+  setFlowNode("flow-opex", "营业费用", metrics.opex, base);
+  setFlowNode("flow-net", "净利润", metrics.net, base);
+  setFlowNode("flow-tax", metrics.taxLabel || "税项及其他", metrics.tax, base);
+  setFlowNode("flow-other", "其他收益", metrics.other, base);
+  setFlowWidths(metrics, base);
+}
+
+function extractYearFromFlow(chartSpec) {
+  const match = `${chartSpec?.title || ""}`.match(/20\d{2}/);
+  return match ? match[0] : "本期";
+}
+
+function flowMetrics(facts, chartSpec) {
+  const nodeValue = (...names) => {
+    const nodes = chartSpec?.flow_nodes || [];
+    const normalized = names.map((name) => name.toLowerCase());
+    const node = nodes.find((entry) => normalized.some((name) => `${entry.name}`.toLowerCase().includes(name)));
+    return Number.isFinite(node?.value) ? node.value : null;
+  };
+
+  const revenue = nodeValue("总收入", "revenue") || metricValue(facts, "revenue");
+  const gross = nodeValue("毛利润", "gross") || metricValue(facts, "gross_profit");
+  const cost = nodeValue("营业成本", "cost of revenue", "cost") || safeSubtract(revenue, gross);
+  const operating = nodeValue("营业利润", "operating") || metricValue(facts, "operating_income");
+  const opex = nodeValue("营业费用", "operating expenses") || safeSubtract(gross, operating);
+  const net = nodeValue("净利润", "net income") || metricValue(facts, "net_income");
+  const tax = nodeValue("所得税", "tax") || nodeValue("税项", "tax") || safeSubtract(operating, net);
+  const other = nodeValue("营业外", "other") || 0;
 
   return {
-    yoy: buildTrendPart("同比", yoyPart.replace(/^同比\s*/u, "") || "--"),
-    change: buildTrendPart("变化", changePart.replace(/^变化\s*/u, "") || "--"),
+    revenue,
+    gross,
+    cost,
+    operating,
+    opex,
+    net,
+    tax: tax && tax > 0 ? tax : 0,
+    taxLabel: chartSpec?.flow_nodes?.some((node) => `${node.name}`.includes("所得税")) ? "所得税费用" : "税项及其他",
+    other: Math.max(0, other || 0),
   };
 }
 
-function buildTrendPart(label, value) {
-  const trimmed = String(value || "--").trim();
-  return {
-    label,
-    value: trimmed,
-    tone: getTrendTone(trimmed),
+function safeSubtract(a, b) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) {
+    return null;
+  }
+  return Math.max(0, a - b);
+}
+
+function setFlowNode(id, label, value, base) {
+  const target = $(id);
+  if (!target) {
+    return;
+  }
+  const percent = Number.isFinite(value) && base ? `${((value / base) * 100).toFixed(1)}%` : "--";
+  target.innerHTML = `<span>${label}</span><strong>${Number.isFinite(value) ? formatMillion(value) : "--"}</strong><span>${percent}</span>`;
+}
+
+function setFlowWidths(metrics, base) {
+  const setWidth = (selector, value, min = 14, max = 112) => {
+    const target = document.querySelector(selector);
+    if (!target || !Number.isFinite(value) || !base) {
+      return;
+    }
+    const width = Math.max(min, Math.min(max, (value / base) * max));
+    target.style.strokeWidth = width.toFixed(1);
   };
+  setWidth(".flow-gross", metrics.gross, 28, 96);
+  setWidth(".flow-cost", metrics.cost, 24, 108);
+  setWidth(".flow-opex", metrics.opex, 12, 58);
+  setWidth(".flow-net", metrics.net, 24, 82);
+  setWidth(".flow-tax", metrics.tax, 8, 42);
 }
 
-function getTrendTone(value) {
-  if (!value || value === "--") {
-    return "is-neutral";
-  }
-  if (value.includes("+")) {
-    return "is-positive";
-  }
-  if (value.includes("-")) {
-    return "is-negative";
-  }
-  return "is-neutral";
+function renderCashSection(facts, chartSpec) {
+  setText("cash-chart-title", chartSpec?.title || "经营现金流桥接（百万美元）");
+  const ocf = metricValue(facts, "operating_cash_flow");
+  const fcf = metricValue(facts, "free_cash_flow");
+  const capex = Number.isFinite(ocf) && Number.isFinite(fcf) ? fcf - ocf : null;
+  const values = chartSpec?.series?.[0]?.values?.length
+    ? chartSpec.series[0].values.map(Number)
+    : [ocf || 0, capex || 0, fcf || 0];
+  renderCashWaterfall(chartSpec, values);
+  renderCashKpis(facts, values);
 }
 
-function fillEvidenceCards(items = []) {
-  const target = document.getElementById("evidence-grid");
-  target.innerHTML = "";
-  if (!items.length) {
-    target.innerHTML = `
-      <article class="evidence-card empty-card">
-        <h4>当前没有证据卡片</h4>
-        <p>本轮输出没有附加来源片段。</p>
-      </article>
-    `;
-    return;
-  }
+function renderCashWaterfall(chartSpec, values) {
+  const operatingCash = Number(values[0]) || 0;
+  const capex = Number(values[1]) || 0;
+  const freeCash = Number(values[2]) || operatingCash + capex;
+  const labels = chartSpec?.categories?.length
+    ? chartSpec.categories.slice(0, 3)
+    : ["经营现金流", "资本开支", "自由现金流"];
+  const capexAbs = Math.abs(capex);
+  const bridgeBase = Math.min(operatingCash, freeCash);
+  const maxValue = Math.max(operatingCash, freeCash, operatingCash + capexAbs) * 1.22;
 
-  items.forEach((item) => {
-    const metrics = Array.isArray(item.related_metrics) ? item.related_metrics : [];
-    const chips = metrics.length
-      ? `<div class="evidence-chip-row">${metrics
-          .map((metric) => `<span class="evidence-chip">${escapeHtml(metric)}</span>`)
-          .join("")}</div>`
-      : "";
-    const confidence = formatImportanceBadge(item.importance || "medium");
-
-    const card = document.createElement("article");
-    card.className = `evidence-card evidence-${escapeHtml(item.category || "explanation")}`;
-    card.innerHTML = `
-      <div class="evidence-card-header">
-        <div>
-          <p class="card-kicker">${escapeHtml(item.category || "evidence")}</p>
-          <h4>${escapeHtml(item.title)}</h4>
-        </div>
-        <span class="confidence-pill ${escapeHtml(confidence.className)}">${escapeHtml(confidence.label)}</span>
-      </div>
-      <p class="evidence-summary">${escapeHtml(item.summary || "")}</p>
-      ${chips}
-      <div class="evidence-meta">
-        <strong>来源：</strong> ${escapeHtml(item.source_label || "未标注")}
-      </div>
-      <p class="evidence-snippet">${escapeHtml(item.source_snippet || "")}</p>
-      ${
-        item.why_it_matters
-          ? `<p class="evidence-why"><strong>为何重要：</strong> ${escapeHtml(item.why_it_matters)}</p>`
-          : ""
-      }
-    `;
-    target.appendChild(card);
-  });
-}
-
-function fillList(elementId, items = []) {
-  const target = document.getElementById(elementId);
-  target.innerHTML = "";
-  if (!items.length) {
-    const li = document.createElement("li");
-    li.textContent = "当前没有可显示内容。";
-    target.appendChild(li);
-    return;
-  }
-
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    li.textContent = item;
-    target.appendChild(li);
-  });
-}
-
-function fillWarnings(warnings = []) {
-  const target = document.getElementById("warnings");
-  target.innerHTML = "";
-  if (!warnings.length) {
-    const li = document.createElement("li");
-    li.textContent = "当前没有额外警告。";
-    target.appendChild(li);
-    return;
-  }
-  warnings.forEach((warning) => {
-    const li = document.createElement("li");
-    li.textContent = warning;
-    target.appendChild(li);
-  });
-}
-
-function fillGlossary(items = []) {
-  const target = document.getElementById("glossary");
-  target.innerHTML = "";
-  if (!items.length) {
-    target.innerHTML = "<p>当前没有术语卡片。</p>";
-    return;
-  }
-
-  items.forEach((item) => {
-    const card = document.createElement("article");
-    card.className = "glossary-card";
-    card.innerHTML = `
-      <h4>${escapeHtml(item.term)}</h4>
-      <p>${escapeHtml(item.plain_explanation)}</p>
-    `;
-    target.appendChild(card);
-  });
-}
-
-function renderCharts(chartSpecs = []) {
-  state.chartObservers.forEach((observer) => observer.disconnect());
-  state.chartObservers = [];
-  state.charts.forEach((chart) => chart.dispose());
-  state.charts = [];
-
-  const grid = document.getElementById("charts-grid");
-  const featuredGrid = document.getElementById("featured-chart-grid");
-  grid.innerHTML = "";
-  featuredGrid.innerHTML = "";
-
-  if (!chartSpecs.length) {
-    grid.innerHTML = `
-      <article class="chart-card">
-        <div class="chart-card-header">
-          <div>
-            <h3>当前没有图表</h3>
-            <p class="chart-copy">模型没有在本轮上下文里拿到足够明确的结构化数字。</p>
-          </div>
-        </div>
-      </article>
-    `;
-    return;
-  }
-
-  const featuredChart =
-    chartSpecs.find((spec) => spec.chart_type === "sankey") || null;
-  const regularCharts = featuredChart
-    ? chartSpecs.filter((spec) => spec !== featuredChart)
-    : chartSpecs;
-
-  if (featuredChart) {
-    renderChartCard(featuredGrid, featuredChart, true, chartSpecs);
-  }
-
-  regularCharts.forEach((spec, index) => {
-    renderChartCard(grid, spec, false, regularCharts, index, regularCharts.length === 1);
-  });
-}
-
-function renderChartCard(target, spec, forceFeatured = false, chartSpecs = [], index = 0, isSolo = false) {
-  const card = document.createElement("article");
-  card.className = `chart-card ${forceFeatured ? "featured" : getChartCardClass(spec, index, chartSpecs)}`;
-  if (isSolo) {
-    card.classList.add("solo");
-  }
-  if (spec.chart_type === "sankey") {
-    card.classList.add("is-sankey");
-  }
-  const confidence = formatPerformanceBadgeForChart(spec, state.digest?.fact_snapshot || []);
-  const canvasId = `chart-${Math.random().toString(36).slice(2)}`;
-  card.innerHTML = `
-    <div class="chart-card-header">
-      <div>
-        <h3>${escapeHtml(spec.title)}</h3>
-        <p class="chart-copy">${escapeHtml(spec.why_it_matters || "")}</p>
-      </div>
-      <span class="confidence-pill ${escapeHtml(confidence.className)}">${escapeHtml(confidence.label)}</span>
-    </div>
-    <div id="${canvasId}" class="chart-canvas"></div>
-    <div class="source-footnote">
-      <strong>数据线索：</strong> ${escapeHtml(spec.source_snippet || "")}
-    </div>
-  `;
-  target.appendChild(card);
-
-  const chart = echarts.init(document.getElementById(canvasId), null, {
-    renderer: "canvas",
-  });
-  chart.setOption(buildChartOption(spec));
-  state.charts.push(chart);
-
-  queueChartResize(chart);
-  if ("ResizeObserver" in window) {
-    const observer = new ResizeObserver(() => queueChartResize(chart));
-    observer.observe(card);
-    state.chartObservers.push(observer);
-  }
-}
-
-function buildChartOption(spec) {
-  const categories = spec.categories || [];
-  const palette = spec.palette && spec.palette.length
-    ? spec.palette
-    : ["#1d4ed8", "#0f766e", "#ea580c", "#56703d", "#b45309"];
-  const valueFormatter = new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-  });
-  const integerFormatter = new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 0,
-  });
-  const legendType = (spec.series || []).length > 3 ? "scroll" : "plain";
-
-  if (spec.chart_type === "donut") {
-    const firstSeries = spec.series?.[0] || { values: [] };
-    return {
-      color: palette,
-      tooltip: { trigger: "item" },
-      legend: {
-        bottom: 0,
-        left: "center",
-        type: legendType,
-        icon: "circle",
-        textStyle: { color: "#536a72" },
+  initChart("cash-waterfall-chart", {
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      formatter: () =>
+        `${labels[0]}：${numberLabel(operatingCash)}<br/>${labels[1]}：${numberLabel(capex)}<br/>${labels[2]}：${numberLabel(freeCash)}`,
+    },
+    grid: baseGrid({ top: 38, left: 58, right: 26, bottom: 52 }),
+    xAxis: {
+      type: "category",
+      data: labels,
+      axisTick: { show: true, lineStyle: { color: "#cbd4e1" } },
+      axisLine: { lineStyle: { color: "#cbd4e1" } },
+      axisLabel: { color: palette.text, fontSize: 12, fontWeight: 700, margin: 12 },
+    },
+    yAxis: {
+      type: "value",
+      min: 0,
+      max: maxValue || 100,
+      axisLabel: { color: "#536879", formatter: numberLabel },
+      splitLine: { lineStyle: { color: palette.grid } },
+    },
+    series: [
+      {
+        type: "bar",
+        stack: "cash",
+        data: [0, bridgeBase, 0],
+        itemStyle: { color: "transparent" },
+        emphasis: { disabled: true },
+        silent: true,
       },
-      series: [
-        {
-          name: firstSeries.name || spec.title,
-          type: "pie",
-          radius: ["44%", "72%"],
-          avoidLabelOverlap: true,
-          label: { formatter: "{b}\n{d}%" },
-          data: categories.map((category, index) => ({
-            name: category,
-            value: firstSeries.values?.[index] ?? 0,
-          })),
+      {
+        type: "bar",
+        stack: "cash",
+        barWidth: 56,
+        data: [operatingCash, null, freeCash],
+        itemStyle: { color: palette.greenDark, borderRadius: [10, 10, 2, 2] },
+        label: {
+          show: true,
+          position: "top",
+          color: palette.text,
+          fontWeight: 800,
+          formatter: ({ value }) => numberLabel(value),
         },
-      ],
-    };
-  }
-
-  if (spec.chart_type === "waterfall") {
-    const firstSeries = spec.series?.[0] || { values: [] };
-    const rawValues = (firstSeries.values || []).map((value) => Number(value || 0));
-    const helper = [];
-    const positive = [];
-    const negative = [];
-    let runningTotal = 0;
-    const levelAfterBar = [];
-
-    const buildConnectorSeries = (startIndex, endIndex, value) => {
-      const lineData = rawValues.map((_, idx) => {
-        if (idx === startIndex || idx === endIndex) {
-          return value;
-        }
-        return null;
-      });
-      return {
+      },
+      {
+        type: "bar",
+        stack: "cash",
+        barWidth: 56,
+        data: [null, capexAbs, null],
+        itemStyle: { color: palette.red, borderRadius: [10, 10, 2, 2] },
+        label: {
+          show: true,
+          position: capex < 0 ? "bottom" : "top",
+          color: palette.text,
+          fontWeight: 800,
+          formatter: () => numberLabel(capex),
+        },
+      },
+      {
         type: "line",
-        data: lineData,
         symbol: "none",
         silent: true,
         tooltip: { show: false },
-        connectNulls: false,
-        lineStyle: {
-          color: "rgba(23,49,58,0.24)",
-          width: 1.6,
-          type: "dashed",
-        },
-        z: 1,
-      };
-    };
-
-    rawValues.forEach((value, index) => {
-      const isTerminalBar = index === rawValues.length - 1;
-      if (index === 0 || isTerminalBar) {
-        helper.push({
-          value: 0,
-          itemStyle: { color: "transparent", borderColor: "transparent" },
-        });
-        positive.push(Math.max(value, 0));
-        negative.push(value < 0 ? Math.abs(value) : null);
-        if (index === 0) {
-          runningTotal = value;
-        }
-        levelAfterBar[index] = index === 0 ? value : runningTotal;
-        return;
-      }
-
-      if (value >= 0) {
-        helper.push({
-          value: runningTotal,
-          itemStyle: { color: "rgba(15,118,110,0.12)", borderColor: "transparent" },
-        });
-        positive.push(value);
-        negative.push(null);
-        runningTotal += value;
-        levelAfterBar[index] = runningTotal;
-      } else {
-        helper.push({
-          value: runningTotal + value,
-          itemStyle: { color: "rgba(239,68,68,0.12)", borderColor: "transparent" },
-        });
-        positive.push(null);
-        negative.push(Math.abs(value));
-        runningTotal += value;
-        levelAfterBar[index] = runningTotal;
-      }
-    });
-
-    const connectorLineSeries = [];
-    for (let index = 0; index < rawValues.length - 1; index += 1) {
-      const level = levelAfterBar[index];
-      if (typeof level !== "number" || !Number.isFinite(level)) {
-        continue;
-      }
-      connectorLineSeries.push(buildConnectorSeries(index, index + 1, level));
-    }
-
-    return {
-      color: palette,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "shadow" },
-        formatter: (params) => {
-          const idx = params?.[0]?.dataIndex ?? 0;
-          const raw = rawValues[idx] ?? 0;
-          return `${escapeHtml(categories[idx] || "")}<br/>${valueFormatter.format(raw)}（百万美元）`;
-        },
+        data: [operatingCash, operatingCash, freeCash],
+        lineStyle: { width: 2, type: "dashed", color: "rgba(19,36,64,0.22)" },
       },
-      legend: { show: false },
-      grid: { top: 44, left: 22, right: 20, bottom: 28, containLabel: true },
-      xAxis: {
-        type: "category",
-        data: categories,
-        axisLabel: { color: "#536a72", interval: 0 },
-        axisLine: { lineStyle: { color: "rgba(23,49,58,0.15)" } },
-      },
-      yAxis: {
-        type: "value",
-        axisLabel: {
-          color: "#536a72",
-          formatter: (value) => valueFormatter.format(Number(value || 0)),
-        },
-        splitLine: { lineStyle: { color: "rgba(23,49,58,0.08)" } },
-      },
-      series: [
-        {
-          type: "bar",
-          stack: "total",
-          itemStyle: { color: "transparent", borderColor: "transparent" },
-          emphasis: { disabled: true },
-          data: helper,
-          silent: true,
-        },
-        {
-          name: "positive",
-          type: "bar",
-          stack: "total",
-          itemStyle: { color: palette[0] || "#0f766e", borderRadius: [10, 10, 0, 0] },
-          data: positive,
-          label: {
-            show: true,
-            position: "top",
-            color: "#17313a",
-            formatter: ({ dataIndex, value }) =>
-              value == null ? "" : integerFormatter.format(rawValues[dataIndex] || 0),
-          },
-        },
-        {
-          name: "negative",
-          type: "bar",
-          stack: "total",
-          itemStyle: { color: palette[1] || "#ef4444", borderRadius: [10, 10, 0, 0] },
-          data: negative,
-          label: {
-            show: true,
-            position: "bottom",
-            color: "#17313a",
-            formatter: ({ dataIndex, value }) =>
-              value == null ? "" : integerFormatter.format(rawValues[dataIndex] || 0),
-          },
-        },
-        ...connectorLineSeries,
-      ],
-    };
-  }
-
-  if (spec.chart_type === "sankey") {
-      const wrapSankeyLabel = (value) => {
-        const text = String(value || "").trim();
-        if (!text || text.length <= 16 || !text.includes(" ")) {
-          return text;
-        }
-        const words = text.split(/\s+/);
-        const lines = [];
-        let current = "";
-        for (const word of words) {
-          const next = current ? `${current} ${word}` : word;
-          if (next.length > 16 && current) {
-            lines.push(current);
-            current = word;
-          } else {
-            current = next;
-          }
-        }
-        if (current) {
-          lines.push(current);
-        }
-        return lines.slice(0, 2).join("\n");
-      };
-      const formatSankeyValue = (value) => integerFormatter.format(Number(value || 0));
-      const nodes = [...(spec.flow_nodes || [])]
-        .sort((a, b) => {
-          const depthA = Number(a?.depth ?? 99);
-          const depthB = Number(b?.depth ?? 99);
-          if (depthA !== depthB) {
-            return depthA - depthB;
-          }
-          return Number(a?.layout_order ?? 0) - Number(b?.layout_order ?? 0);
-        })
-        .map((node, index) => ({
-        name: node.name,
-        value: node.value ?? undefined,
-        depth: node.depth ?? undefined,
-        itemStyle: {
-          color: node.item_style_color || palette[index % palette.length],
-          borderColor: "rgba(23,49,58,0.08)",
-          borderWidth: 1,
-        },
-      }));
-      const links = (spec.flow_links || []).map((link) => ({
-        source: link.source,
-        target: link.target,
-        value: link.value,
-      }));
-
-      return {
-        color: palette,
-        tooltip: {
-          trigger: "item",
-          formatter: (params) => {
-            if (params.dataType === "edge") {
-              return `${escapeHtml(params.data.source)} → ${escapeHtml(params.data.target)}<br/>${formatSankeyValue(params.data.value)}（百万美元）`;
-            }
-            return `${escapeHtml(params.name)}<br/>${formatSankeyValue(params.value)}（百万美元）`;
-          },
-        },
-        series: [
-          {
-            type: "sankey",
-            left: 40,
-            top: 28,
-            right: 220,
-            bottom: 20,
-            emphasis: { focus: "adjacency" },
-            draggable: false,
-            nodeAlign: "left",
-            layoutIterations: 32,
-            nodeWidth: 26,
-            nodeGap: 34,
-            data: nodes,
-            links,
-            lineStyle: {
-              color: "gradient",
-              curveness: 0.46,
-              opacity: 0.56,
-            },
-            label: {
-              color: "#17313a",
-              fontSize: 13,
-              fontWeight: 600,
-              position: "right",
-              distance: 10,
-              width: 194,
-              overflow: "break",
-              formatter: (params) => `${wrapSankeyLabel(params?.name)}\n${formatSankeyValue(params?.value)}`,
-            },
-          },
-        ],
-      };
-    }
-
-  const isLineLike = spec.chart_type === "line" || spec.chart_type === "area";
-  const isSingleSeries = (spec.series || []).length === 1;
-  const useHorizontalBars =
-    spec.chart_type === "bar" && isSingleSeries && categories.length >= 4;
-  const shouldRotateLabels = !useHorizontalBars && categories.some((category) =>
-    String(category).length > 10
-  );
-
-  const series = (spec.series || []).map((item, index) => {
-    const base = {
-      name: item.name,
-      type: spec.chart_type === "stacked_bar" ? "bar" : spec.chart_type,
-      data: item.values || [],
-      smooth: spec.chart_type === "line" || spec.chart_type === "area",
-      emphasis: { focus: "series" },
-    };
-
-    if (spec.chart_type === "area") {
-      base.type = "line";
-      base.areaStyle = { opacity: 0.2 };
-    }
-
-    if (spec.chart_type === "stacked_bar") {
-      base.stack = "total";
-      base.borderRadius = [6, 6, 0, 0];
-      base.barMaxWidth = 28;
-    }
-
-    if (base.type === "bar") {
-      base.itemStyle = {
-        borderRadius: useHorizontalBars ? [0, 8, 8, 0] : [8, 8, 2, 2],
-      };
-      base.barMaxWidth = useHorizontalBars ? 22 : 34;
-    }
-
-    if (isLineLike) {
-      base.symbol = "circle";
-      base.symbolSize = categories.length <= 4 ? 10 : 7;
-      base.showSymbol = true;
-      base.lineStyle = { width: 3 };
-    }
-
-    base.color = palette[index % palette.length];
-    return base;
+    ],
   });
+}
 
+function renderCashKpis(facts, values) {
+  const target = $("cash-kpis");
+  if (!target) {
+    return;
+  }
+  const items = [
+    facts.operating_cash_flow || { label: "经营现金流", value_text: `$${((values[0] || 0) / 1000).toFixed(1)}B`, yoy_text: "" },
+    { label: "资本开支", value_text: `$${(Math.abs(values[1] || 0) / 1000).toFixed(1)}B`, yoy_text: "" },
+    facts.free_cash_flow || { label: "自由现金流", value_text: `$${((values[2] || 0) / 1000).toFixed(1)}B`, yoy_text: "" },
+    facts.cash_and_equivalents || { label: "期末现金", value_text: "--", yoy_text: "" },
+  ];
+  target.innerHTML = "";
+  items.forEach((fact, index) => target.append(createMetricCard(fact, index)));
+}
+
+function renderRiskGrid(digest) {
+  const target = $("risk-grid");
+  if (!target) {
+    return;
+  }
+  const icons = ["◎", "⌘", "♟", "盾", "¥", "◇"];
+  const risks = (digest.risks || []).slice(0, 6);
+  const fallback = [
+    "宏观经济不确定性可能影响消费需求与汇率表现。",
+    "供应链风险可能导致产品供给和成本波动。",
+    "市场竞争加剧可能影响定价和利润率。",
+    "监管与合规风险可能带来额外成本。",
+    "汇率波动可能影响海外收入折算。",
+    "新品需求不确定性可能影响未来增长。",
+  ];
+  target.innerHTML = "";
+  (risks.length ? risks : fallback).slice(0, 6).forEach((risk, index) => {
+    const title = riskTitle(risk, index);
+    const card = document.createElement("section");
+    card.className = "risk-item";
+    card.innerHTML = `
+      <span class="risk-icon">${icons[index % icons.length]}</span>
+      <span>
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(risk)}</p>
+      </span>
+    `;
+    target.append(card);
+  });
+}
+
+function riskTitle(text, index) {
+  const clean = `${text || ""}`.replace(/^[-•\s]+/, "");
+  const first = clean.split(/[：:，,。.;；]/)[0].trim();
+  return first.length >= 3 && first.length <= 14 ? first : `风险 ${index + 1}`;
+}
+
+function renderDashboard(digest, facts, lineChart, sankeyChart, apple) {
+  const year = extractYear(digest.reporting_period);
+  setText("dashboard-section-copy", `关键指标一览，快速把握 ${year} 财年财务健康状况。`);
+  setText(
+    "source-note",
+    `数据来源：${sankeyChart?.source_snippet || lineChart?.source_snippet || "公开 10-K / XBRL 披露"}`
+  );
+  renderDashboardKpis(facts);
+  renderDonuts(digest, sankeyChart, apple);
+  renderRevenueBars(lineChart, facts);
+}
+
+function renderDashboardKpis(facts) {
+  const target = $("dashboard-kpis");
+  if (!target) {
+    return;
+  }
+  target.innerHTML = "";
+  pickFacts(facts, metricOrder, 8).forEach((fact, index) => {
+    target.append(createMetricCard(fact, index, "dashboard"));
+  });
+}
+
+function renderDonuts(digest, sankeyChart, apple) {
+  const businessData = apple
+    ? [
+        { name: "iPhone", value: 52.1 },
+        { name: "服务", value: 21.9 },
+        { name: "Mac", value: 8.7 },
+        { name: "iPad", value: 7.1 },
+        { name: "可穿戴", value: 10.0 },
+      ]
+    : topSankeySources(sankeyChart);
+  const regionData = topSankeySources(sankeyChart);
+
+  initChart(
+    "business-donut-chart",
+    donutOption(businessData, [palette.blue, palette.green, palette.orange, palette.purple, "#9fb2d6"])
+  );
+  initChart(
+    "region-donut-chart",
+    donutOption(regionData, [palette.blue, palette.orange, palette.green, palette.purple, "#26a3a3", "#8b9ab6"])
+  );
+}
+
+function topSankeySources(chartSpec) {
+  const nodes = chartSpec?.flow_nodes || [];
+  const links = chartSpec?.flow_links || [];
+  const targetNames = new Set(links.map((link) => link.target));
+  const sourceNodes = nodes
+    .filter((node) => !targetNames.has(node.name) && Number.isFinite(node.value) && node.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+  const total = sourceNodes.reduce((sum, item) => sum + item.value, 0);
+  if (!sourceNodes.length || !total) {
+    return [{ name: "收入", value: 100 }];
+  }
+  return sourceNodes.map((node) => ({
+    name: cleanSegmentName(node.name),
+    value: Number(((node.value / total) * 100).toFixed(1)),
+  }));
+}
+
+function cleanSegmentName(name) {
+  return `${name || ""}`
+    .replace(/\s+Segment$/i, "")
+    .replace(/\s+segment$/i, "")
+    .replace("Greater China", "大中华区")
+    .replace("Rest Of Asia Pacific", "亚太其他")
+    .replace("Americas", "美洲")
+    .replace("Europe", "欧洲")
+    .replace("Japan", "日本");
+}
+
+function donutOption(data, colors) {
   return {
-    color: palette,
-    animationDuration: 520,
-    tooltip: {
-      trigger: spec.chart_type === "donut" ? "item" : "axis",
-      valueFormatter: (value) => valueFormatter.format(Number(value || 0)),
-    },
+    color: colors,
+    tooltip: { trigger: "item", formatter: "{b}: {d}%" },
     legend: {
-      top: 0,
-      left: 0,
-      type: legendType,
-      textStyle: { color: "#536a72" },
+      right: 2,
+      top: "center",
+      orient: "vertical",
+      icon: "circle",
+      itemWidth: 8,
+      itemHeight: 8,
+      textStyle: { color: palette.text, fontSize: 10, fontWeight: 600 },
+      formatter: (name) => {
+        const item = data.find((entry) => entry.name === name);
+        return `${name}    ${item?.value ?? 0}%`;
+      },
     },
-    grid: useHorizontalBars
-      ? { top: 52, left: 18, right: 28, bottom: 12, containLabel: true }
-      : {
-          top: (spec.series || []).length > 1 ? 62 : 48,
-          left: 22,
-          right: 20,
-          bottom: shouldRotateLabels ? 58 : 32,
-          containLabel: true,
-        },
-    xAxis: useHorizontalBars
-      ? {
-          type: "value",
-          axisLabel: {
-            color: "#536a72",
-            formatter: (value) => valueFormatter.format(Number(value || 0)),
-          },
-          splitLine: { lineStyle: { color: "rgba(23,49,58,0.08)" } },
-        }
-      : {
-          type: "category",
-          name: spec.x_axis_label || "",
-          axisLabel: {
-            color: "#536a72",
-            interval: 0,
-            rotate: shouldRotateLabels ? 18 : 0,
-          },
-          axisLine: { lineStyle: { color: "rgba(23,49,58,0.15)" } },
-          data: categories,
-        },
-    yAxis: useHorizontalBars
-      ? {
-          type: "category",
-          axisLabel: { color: "#536a72" },
-          axisLine: { lineStyle: { color: "rgba(23,49,58,0.15)" } },
-          data: categories,
-        }
-      : {
-          type: "value",
-          axisLabel: {
-            color: "#536a72",
-            formatter: (value) => valueFormatter.format(Number(value || 0)),
-          },
-          splitLine: { lineStyle: { color: "rgba(23,49,58,0.08)" } },
-        },
-    series,
+    series: [
+      {
+        type: "pie",
+        radius: ["48%", "76%"],
+        center: ["27%", "50%"],
+        avoidLabelOverlap: true,
+        label: { show: false },
+        data,
+      },
+    ],
   };
 }
 
-function getChartCardClass(spec, index, chartSpecs) {
-  const categories = spec.categories || [];
-  const seriesCount = (spec.series || []).length;
+function renderRevenueBars(chartSpec, facts) {
+  const revenueSeries =
+    chartSpec?.series?.find((item) => item.name?.includes("营收") || item.name?.includes("收入")) ||
+    chartSpec?.series?.[0];
+  const categories = chartSpec?.categories?.length ? chartSpec.categories : ["本期"];
+  const values = revenueSeries?.values?.length ? revenueSeries.values : [metricValue(facts, "revenue") || 0];
 
-  if (chartSpecs.length === 1) {
-    return "featured";
-  }
-
-  if (spec.chart_type === "line" || spec.chart_type === "area" || spec.chart_type === "sankey") {
-    return "featured";
-  }
-
-  if (spec.chart_type === "stacked_bar") {
-    return "focused";
-  }
-
-  if (spec.chart_type === "bar" && categories.length >= 4) {
-    return "focused";
-  }
-
-  if (seriesCount >= 3 || index === 0) {
-    return "focused";
-  }
-
-  return "supporting";
-}
-
-function queueChartResize(chart) {
-  requestAnimationFrame(() => {
-    chart.resize();
-    requestAnimationFrame(() => chart.resize());
+  initChart("revenue-bar-chart", {
+    color: [palette.blue],
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    grid: baseGrid({ top: 18, left: 44, right: 10, bottom: 28 }),
+    xAxis: {
+      type: "category",
+      data: categories,
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: "#d5dbe7" } },
+      axisLabel: { color: palette.muted, fontWeight: 600 },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: palette.muted, fontSize: 10, formatter: numberLabel },
+      splitLine: { lineStyle: { color: palette.grid } },
+    },
+    series: [
+      {
+        type: "bar",
+        barWidth: 30,
+        data: values,
+        itemStyle: { color: palette.blue, borderRadius: [4, 4, 0, 0] },
+      },
+    ],
   });
 }
 
+function chartColor(index) {
+  return [palette.blue, palette.greenDark, palette.orange, palette.purple, palette.gray][index % 5];
+}
+
 function escapeHtml(value) {
-  return String(value ?? "")
+  return `${value || ""}`
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+    .replaceAll("'", "&#039;");
 }
 
-function formatImportanceBadge(value) {
-  const normalized = String(value || "medium").toLowerCase();
-  const labels = {
-    high: "高关注",
-    medium: "关注",
-    low: "补充",
-  };
-  return {
-    label: labels[normalized] || labels.medium,
-    className: `is-${["high", "medium", "low"].includes(normalized) ? normalized : "medium"}`,
-  };
-}
-
-function formatPerformanceBadgeForMetric(item) {
-  const metricKey = String(item?.metric_key || "");
-  const yoy = extractSignedPercent(item?.yoy_text || "");
-  const direction = isInverseMetric(metricKey) ? -1 : 1;
-  return formatPerformanceBadgeFromScore((yoy ?? 0) * direction, yoy === null);
-}
-
-function formatPerformanceBadgeForChart(spec, factSnapshot = []) {
-  const title = String(spec?.title || "");
-  const chartType = String(spec?.chart_type || "");
-  const metricLookup = new Map(
-    (factSnapshot || []).map((item) => [String(item.metric_key || ""), item])
-  );
-
-  const pickAverage = (keys) => {
-    const scores = keys
-      .map((key) => {
-        const item = metricLookup.get(key);
-        if (!item) {
-          return null;
-        }
-        const yoy = extractSignedPercent(item.yoy_text || "");
-        if (yoy === null) {
-          return null;
-        }
-        return yoy * (isInverseMetric(key) ? -1 : 1);
-      })
-      .filter((value) => typeof value === "number");
-    if (!scores.length) {
-      return null;
+function bindForm() {
+  $("analysis-form")?.addEventListener("submit", handleGenerate);
+  $("download-json")?.addEventListener("click", downloadCurrentDigest);
+  $("print-report")?.addEventListener("click", () => window.print());
+  $("upload-zone")?.addEventListener("click", () => $("file-input")?.click());
+  $("file-input")?.addEventListener("change", (event) => {
+    selectedFile = event.target.files?.[0] || null;
+    setText("file-name", selectedFile ? selectedFile.name : "支持 PDF / HTML / TXT");
+    if (selectedFile && $("path-input")) {
+      $("path-input").value = "";
     }
-    return scores.reduce((sum, value) => sum + value, 0) / scores.length;
-  };
-
-  if (chartType === "waterfall" || title.includes("现金流")) {
-    const score = pickAverage(["operating_cash_flow", "free_cash_flow", "capital_expenditures"]);
-    return formatPerformanceBadgeFromScore(score ?? 0, score === null);
-  }
-
-  if (chartType === "sankey" || title.includes("营收流向") || title.includes("Revenue-to-profit")) {
-    const score = pickAverage(["revenue", "operating_income", "net_income"]);
-    return formatPerformanceBadgeFromScore(score ?? 0, score === null);
-  }
-
-  if (title.includes("流动性") || title.includes("债务") || title.includes("Liquidity")) {
-    const score = pickAverage(["cash_and_equivalents", "short_term_investments", "total_debt"]);
-    return formatPerformanceBadgeFromScore(score ?? 0, score === null);
-  }
-
-  const score = deriveScoreFromSeries(spec);
-  return formatPerformanceBadgeFromScore(score ?? 0, score === null);
-}
-
-function deriveScoreFromSeries(spec) {
-  const seriesList = Array.isArray(spec?.series) ? spec.series : [];
-  const scores = [];
-  seriesList.forEach((series) => {
-    const values = Array.isArray(series?.values) ? series.values.filter((value) => typeof value === "number") : [];
-    if (values.length < 2) {
-      return;
-    }
-    const previous = Number(values[values.length - 2] || 0);
-    const current = Number(values[values.length - 1] || 0);
-    if (!Number.isFinite(previous) || Math.abs(previous) < 1e-6) {
-      return;
-    }
-    scores.push(((current - previous) / Math.abs(previous)) * 100);
   });
-  if (!scores.length) {
-    return null;
-  }
-  return scores.reduce((sum, value) => sum + value, 0) / scores.length;
+  $("path-input")?.addEventListener("input", () => {
+    if ($("path-input")?.value.trim()) {
+      selectedFile = null;
+      if ($("file-input")) {
+        $("file-input").value = "";
+      }
+      setText("file-name", "支持 PDF / HTML / TXT");
+    }
+  });
 }
 
-function extractSignedPercent(text) {
-  const match = String(text || "").match(/同比\s*([+-]?\d+(?:\.\d+)?)%/u);
-  return match ? Number(match[1]) : null;
+function setReportActionsEnabled(enabled) {
+  ["download-json", "print-report"].forEach((id) => {
+    const button = $(id);
+    if (button) {
+      button.disabled = !enabled;
+    }
+  });
 }
 
-function isInverseMetric(metricKey) {
-  return ["total_debt", "capital_expenditures"].includes(String(metricKey || ""));
+function downloadCurrentDigest() {
+  if (!currentDigest) {
+    return;
+  }
+  const blob = new Blob([JSON.stringify(currentDigest, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const company = `${currentDigest.company_name || "report"}`.replace(/[^\w-]+/g, "_");
+  const period = `${currentDigest.reporting_period || "digest"}`.replace(/[^\w-]+/g, "_");
+  anchor.href = url;
+  anchor.download = `${company}_${period}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
-function formatPerformanceBadgeFromScore(score, isUnknown = false) {
-  if (isUnknown) {
-    return { label: "信息有限", className: "is-neutral" };
-  }
-  if (score >= 20) {
-    return { label: "显著改善", className: "is-positive-strong" };
-  }
-  if (score >= 5) {
-    return { label: "表现改善", className: "is-positive" };
-  }
-  if (score > -5) {
-    return { label: "基本持平", className: "is-neutral" };
-  }
-  if (score > -15) {
-    return { label: "小幅承压", className: "is-negative" };
-  }
-  return { label: "明显承压", className: "is-negative-strong" };
-}
-
-function buildCompanyAvatar(name = "") {
-  const cleaned = String(name || "")
-    .replace(/\b(inc|inc\.|corporation|corp|corp\.|company|co\.|limited|ltd\.|class\s+[abcz])\b/gi, "")
-    .replace(/[^A-Za-z0-9\u4e00-\u9fff ]+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return "ID";
-  }
-  const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase();
-  }
-  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
-}
-
-detectRuntime();
-setProgress(0, "idle");
-window.addEventListener("resize", () => {
-  state.charts.forEach((chart) => chart.resize());
+window.addEventListener("DOMContentLoaded", () => {
+  bindForm();
+  checkRuntime();
+  setProgress("输入路径或上传文件后开始分析。", 0);
 });
+
+window.addEventListener("resize", () => chartInstances.forEach((chart) => chart.resize()));
