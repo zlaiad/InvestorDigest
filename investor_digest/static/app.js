@@ -341,6 +341,7 @@ function renderDigest(digest) {
 
 function renderHero(digest, apple, year, companyName) {
   setText("hero-mark", apple ? "" : companyInitials(companyName));
+  setText("generic-visual-mark", apple ? "" : companyInitials(companyName));
   setText("hero-title", `${apple ? "苹果公司" : companyName} ${year} 财年报告解析`);
   setText("hero-subtitle", `Annual Report Analysis ${year}`);
   setText(
@@ -489,8 +490,10 @@ function iconTone(index, metricKey) {
 function renderProfitFlow(facts, sankeyChart) {
   const metrics = flowMetrics(facts, sankeyChart);
   const base = metrics.revenue || 1;
+  const sources = flowSources(sankeyChart, base);
 
   setText("profit-flow-title", `利润流向（${extractYearFromFlow(sankeyChart)}年，百万美元）`);
+  renderFlowSources(sources, base);
   setFlowNode("flow-revenue", "营收", metrics.revenue, base);
   setFlowNode("flow-gross", "毛利润", metrics.gross, base);
   setFlowNode("flow-cost", "营业成本", metrics.cost, base);
@@ -499,7 +502,7 @@ function renderProfitFlow(facts, sankeyChart) {
   setFlowNode("flow-net", "净利润", metrics.net, base);
   setFlowNode("flow-tax", metrics.taxLabel || "税项及其他", metrics.tax, base);
   setFlowNode("flow-other", "其他收益", metrics.other, base);
-  setFlowWidths(metrics, base);
+  renderProfitFlowPaths(metrics, sources, base);
 }
 
 function extractYearFromFlow(chartSpec) {
@@ -535,6 +538,151 @@ function flowMetrics(facts, chartSpec) {
     taxLabel: chartSpec?.flow_nodes?.some((node) => `${node.name}`.includes("所得税")) ? "所得税费用" : "税项及其他",
     other: Math.max(0, other || 0),
   };
+}
+
+function flowSources(chartSpec, totalRevenue) {
+  const nodes = chartSpec?.flow_nodes || [];
+  const links = chartSpec?.flow_links || [];
+  const revenueNode = nodes.find((node) => /总收入|revenue/i.test(`${node.name}`));
+  const revenueName = revenueNode?.name;
+  const linkedSources = revenueName
+    ? links
+        .filter((link) => link.target === revenueName && Number.isFinite(link.value) && link.value > 0)
+        .map((link) => ({ name: cleanSegmentName(link.source), value: link.value }))
+    : [];
+  const nodeSources = nodes
+    .filter((node) => node.depth === 0 && Number.isFinite(node.value) && node.value > 0)
+    .map((node) => ({ name: cleanSegmentName(node.name), value: node.value }));
+  const sourceMap = new Map();
+  [...linkedSources, ...nodeSources].forEach((source) => {
+    const current = sourceMap.get(source.name) || 0;
+    sourceMap.set(source.name, Math.max(current, source.value));
+  });
+  const sources = [...sourceMap.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value);
+
+  if (!sources.length || !Number.isFinite(totalRevenue)) {
+    return [{ name: "主营收入", value: totalRevenue || 1 }];
+  }
+
+  if (sources.length <= 5) {
+    return sources;
+  }
+
+  const topSources = sources.slice(0, 4);
+  const otherValue = sources.slice(4).reduce((sum, source) => sum + source.value, 0);
+  return [...topSources, { name: "其他收入", value: otherValue }];
+}
+
+function renderFlowSources(sources, base) {
+  const target = $("flow-sources");
+  if (!target) {
+    return;
+  }
+  target.innerHTML = "";
+  const positions = sourcePositions(sources.length);
+  sources.forEach((source, index) => {
+    const node = document.createElement("div");
+    node.className = "flow-source-node";
+    const nodeHeight = flowWidth(source.value, base, 54, 98);
+    node.style.height = `${nodeHeight}px`;
+    node.style.top = `${positions[index] - nodeHeight / 2}px`;
+    node.innerHTML = `<span>${escapeHtml(source.name)}</span><strong>${formatMillion(source.value)}</strong><span>${((source.value / base) * 100).toFixed(1)}%</span>`;
+    target.append(node);
+  });
+}
+
+function sourcePositions(count) {
+  if (count <= 1) {
+    return [250];
+  }
+  const top = 98;
+  const bottom = 404;
+  return Array.from({ length: count }, (_, index) => top + ((bottom - top) * index) / (count - 1));
+}
+
+function renderProfitFlowPaths(metrics, sources, base) {
+  const target = $("profit-flow-links");
+  if (!target) {
+    return;
+  }
+  target.innerHTML = "";
+  const positions = sourcePositions(sources.length);
+  const revenueEntryY = sourceRevenueEntryPositions(sources);
+  sources.forEach((source, index) => {
+    addFlowPath(
+      target,
+      "source-flow",
+      `M118,${positions[index]} C160,${positions[index]} 184,${revenueEntryY[index]} 230,${revenueEntryY[index]}`,
+      flowWidth(source.value, base, 10, 62)
+    );
+  });
+
+  addFlowPath(
+    target,
+    "positive flow-gross",
+    "M305,224 C360,224 368,165 408,165 C492,165 530,135 640,135",
+    flowWidth(metrics.gross, base, 18, 92)
+  );
+  addFlowPath(
+    target,
+    "negative flow-cost",
+    "M305,296 C352,296 376,347 430,347",
+    flowWidth(metrics.cost, base, 24, 104)
+  );
+  addFlowPath(
+    target,
+    "negative flow-opex",
+    "M486,212 C550,250 585,358 648,358",
+    flowWidth(metrics.opex, base, 10, 42)
+  );
+  addFlowPath(
+    target,
+    "positive flow-net",
+    "M708,137 C782,137 818,112 890,112",
+    flowWidth(metrics.net, base, 16, 76)
+  );
+  addFlowPath(
+    target,
+    "negative flow-tax",
+    "M708,174 C782,205 818,260 890,260",
+    flowWidth(metrics.tax, base, 6, 32)
+  );
+  addFlowPath(
+    target,
+    "neutral",
+    "M708,185 C782,300 818,388 890,388",
+    flowWidth(metrics.other, base, 4, 18)
+  );
+}
+
+function sourceRevenueEntryPositions(sources) {
+  const revenueTop = 188;
+  const revenueHeight = 128;
+  const total = sources.reduce((sum, source) => sum + Math.max(0, source.value || 0), 0) || 1;
+  let cursor = revenueTop;
+  return sources.map((source) => {
+    const bandHeight = Math.max(12, (Math.max(0, source.value || 0) / total) * revenueHeight);
+    const center = cursor + bandHeight / 2;
+    cursor += bandHeight;
+    return Math.min(revenueTop + revenueHeight - 6, center);
+  });
+}
+
+function addFlowPath(target, className, d, strokeWidth) {
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("class", `flow ${className}`);
+  path.setAttribute("d", d);
+  path.style.strokeWidth = `${strokeWidth}px`;
+  target.append(path);
+}
+
+function flowWidth(value, base, min, max) {
+  if (!Number.isFinite(value) || !Number.isFinite(base) || base <= 0 || value <= 0) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, (value / base) * max));
 }
 
 function safeSubtract(a, b) {

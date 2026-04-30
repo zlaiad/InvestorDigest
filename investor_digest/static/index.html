@@ -93,12 +93,26 @@
             <p id="hero-period" class="hero-period">报告期间：--</p>
           </div>
           <div id="hero-visual" class="phone-stage" aria-hidden="true">
-            <div class="phone-back">
-              <div class="camera camera-a"></div>
-              <div class="camera camera-b"></div>
-              <div class="camera camera-c"></div>
-              <div class="flash"></div>
-              <div class="phone-logo"></div>
+            <div class="hero-device-orb"></div>
+            <div class="iphone-sketch">
+              <div class="iphone-sketch-back">
+                <span class="lens lens-a"></span>
+                <span class="lens lens-b"></span>
+                <span class="lens lens-c"></span>
+                <span class="flash-dot"></span>
+                <span class="iphone-sketch-logo"></span>
+              </div>
+              <div class="iphone-sketch-front">
+                <span class="dynamic-island"></span>
+                <span class="screen-line long"></span>
+                <span class="screen-line"></span>
+                <span class="screen-pill"></span>
+              </div>
+            </div>
+            <div class="generic-product-card">
+              <span id="generic-visual-mark">F</span>
+              <strong>Annual Report</strong>
+              <small>Financial Insight</small>
             </div>
           </div>
         </section>
@@ -141,14 +155,10 @@
             <article class="flow-card">
               <h3 id="profit-flow-title">利润流向（百万美元）</h3>
               <div class="profit-flow">
-                <svg viewBox="0 0 1000 350" preserveAspectRatio="none" aria-hidden="true">
-                  <path class="flow positive flow-gross" d="M105,145 C176,145 202,126 280,126 C395,126 468,98 610,98" />
-                  <path class="flow negative flow-cost" d="M105,226 C178,226 206,260 292,260" />
-                  <path class="flow negative flow-opex" d="M322,176 C430,208 526,248 620,250" />
-                  <path class="flow positive flow-net" d="M650,98 C760,98 815,86 920,86" />
-                  <path class="flow negative flow-tax" d="M650,132 C760,154 842,176 920,176" />
-                  <path class="flow neutral" d="M650,142 C760,205 842,220 920,220" />
+                <svg id="profit-flow-svg" viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
+                  <g id="profit-flow-links"></g>
                 </svg>
+                <div id="flow-sources" class="flow-sources"></div>
                 <div id="flow-revenue" class="flow-node revenue-node"></div>
                 <div id="flow-gross" class="flow-node gross-node"></div>
                 <div id="flow-cost" class="flow-node cost-node"></div>
