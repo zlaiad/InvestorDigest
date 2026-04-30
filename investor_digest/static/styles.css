@@ -552,15 +552,7 @@ main {
 }
 
 .iphone-sketch-back::before {
-  content: "";
-  position: absolute;
-  top: 22px;
-  left: 22px;
-  width: 168px;
-  height: 156px;
-  border-radius: 36px;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.76), rgba(205, 214, 228, 0.58));
-  border: 1px solid rgba(46, 60, 88, 0.08);
+  display: none;
 }
 
 .iphone-sketch-back::after {
@@ -590,26 +582,15 @@ main {
 }
 
 .lens-b {
-  top: 48px;
-  left: 118px;
+  display: none;
 }
 
 .lens-c {
-  top: 124px;
-  left: 78px;
+  display: none;
 }
 
 .flash-dot {
-  position: absolute;
-  z-index: 1;
-  top: 124px;
-  left: 150px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 35% 35%, #ffffff, #f3f6fb 58%, #cbd5e4 100%);
-  box-shadow: 0 5px 14px rgba(38, 52, 78, 0.16);
+  display: none;
 }
 
 .iphone-sketch-logo {
