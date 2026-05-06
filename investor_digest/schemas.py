@@ -93,6 +93,19 @@ class AnalyzePathRequest(BaseModel):
     language: str | None = None
 
 
+class ReportChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ReportChatRequest(BaseModel):
+    question: str
+    digest: dict[str, object]
+    history: list[ReportChatMessage] = Field(default_factory=list)
+    audience: str | None = None
+    language: str | None = None
+
+
 @dataclass(slots=True)
 class ParsedDocument:
     source_path: Path

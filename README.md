@@ -18,6 +18,8 @@ Current demo scope:
   - positives and risks
   - glossary
   - chart configuration suggestions with friendly palettes
+  - a local filing picker for quickly demonstrating downloaded SEC 10-K samples
+  - a report follow-up assistant for asking deeper questions after the report is generated
 
 ## What it does not do yet
 
@@ -77,6 +79,21 @@ python main.py analyze-path \
   --path sec_filings/sec-edgar-filings/AAPL/10-K/0000320193-23-000106
 ```
 
+## Verification
+
+Run the lightweight smoke test:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Verify the parser and context builder on a local SEC filing without calling the LLM:
+
+```bash
+python3 main.py prepare-path \
+  --path sec_filings/sec-edgar-filings/AAPL/10-K/0000320193-25-000079
+```
+
 ## API
 
 Run the API:
@@ -86,6 +103,18 @@ python main.py serve --host 127.0.0.1 --port 8008
 ```
 
 Then open [http://127.0.0.1:8008/](http://127.0.0.1:8008/) for the investor-friendly report UI.
+
+The UI includes a local sample selector when `sec_filings/sec-edgar-filings/` exists,
+so demos can start from a downloaded 10-K without manually typing the path. Generated
+reports also include a bottom chat assistant. Users can ask follow-up questions about
+specific modules, metric reliability, risks, glossary terms, or business implications,
+and the answer is appended directly below the report.
+
+List available local demo filings:
+
+```bash
+curl http://127.0.0.1:8008/api/filings
+```
 
 Analyze an existing path:
 

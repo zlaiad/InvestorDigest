@@ -44,6 +44,12 @@
           <span>或，输入财报路径</span>
           <input id="path-input" type="text" placeholder="例如：/path/to/financial-report.html" />
         </label>
+        <label class="field demo-field">
+          <span>本地样例</span>
+          <select id="demo-filing">
+            <option value="">正在加载样例...</option>
+          </select>
+        </label>
         <label class="field">
           <span>输出语言</span>
           <select id="language">
@@ -222,6 +228,47 @@
                   <div id="revenue-bar-chart" class="small-chart"></div>
                 </div>
               </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="report-section chat-section">
+          <aside class="section-intro">
+            <span class="section-number">06</span>
+            <h2>继续追问</h2>
+            <p>围绕这份财报继续提问，系统会基于当前报告内容追加回答。</p>
+          </aside>
+          <div class="section-content">
+            <article class="chat-card">
+              <div class="chat-header">
+                <span class="chat-orb">F</span>
+                <span>
+                  <h3>FinSight Assistant</h3>
+                  <p id="chat-context-label">等待报告生成后开始追问。</p>
+                </span>
+              </div>
+              <div id="chat-thread" class="chat-thread" aria-live="polite">
+                <div class="chat-message assistant">
+                  <span class="message-avatar">F</span>
+                  <div class="message-bubble">
+                    <p>报告生成后，你可以继续问我：某个模块怎么看、哪些数据更可信、风险是否严重，或让系统把某段内容解释得更简单。</p>
+                  </div>
+                </div>
+              </div>
+              <div id="chat-suggestions" class="chat-suggestions">
+                <button type="button">解释利润流向模块</button>
+                <button type="button">哪些数字最值得相信？</button>
+                <button type="button">总结最重要的三个风险</button>
+              </div>
+              <form id="report-chat-form" class="chat-composer">
+                <textarea
+                  id="report-chat-input"
+                  rows="1"
+                  placeholder="向这份财报继续提问..."
+                  disabled
+                ></textarea>
+                <button id="report-chat-submit" type="submit" disabled>发送</button>
+              </form>
             </article>
           </div>
         </section>

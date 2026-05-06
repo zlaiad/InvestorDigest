@@ -3,6 +3,8 @@ let selectedFile = null;
 let progressTimer = null;
 let echartsReadyPromise = null;
 let currentDigest = null;
+let reportChatHistory = [];
+let reportChatBusy = false;
 
 const palette = {
   blue: "#3f6ff4",
@@ -172,6 +174,33 @@ async function checkRuntime() {
   }
 }
 
+async function loadDemoFilings() {
+  const select = $("demo-filing");
+  if (!select) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/filings?limit=220");
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    const filings = data.filings || [];
+    select.innerHTML = '<option value="">选择本地 10-K 样例</option>';
+    filings.forEach((filing) => {
+      const option = document.createElement("option");
+      option.value = filing.path;
+      option.textContent = `${filing.ticker} ${filing.report_year || ""} · ${filing.accession}`;
+      select.append(option);
+    });
+    if (!filings.length) {
+      select.innerHTML = '<option value="">未发现本地 SEC 样例</option>';
+    }
+  } catch {
+    select.innerHTML = '<option value="">样例列表不可用</option>';
+  }
+}
+
 function setLoading(isLoading) {
   const button = $("generate-button");
   if (!button) {
@@ -224,6 +253,7 @@ async function handleGenerate(event) {
   event.preventDefault();
   setLoading(true);
   currentDigest = null;
+  setChatEnabled(false);
   setReportActionsEnabled(false);
   startProgressTimer();
 
@@ -335,6 +365,7 @@ function renderDigest(digest) {
   renderCashSection(facts, waterfallChart);
   renderRiskGrid(digest);
   renderDashboard(digest, facts, lineChart, sankeyChart, apple);
+  resetReportChat(digest);
 
   window.setTimeout(() => chartInstances.forEach((chart) => chart.resize()), 80);
 }
@@ -1001,6 +1032,154 @@ function renderRevenueBars(chartSpec, facts) {
   });
 }
 
+function resetReportChat(digest) {
+  reportChatHistory = [];
+  reportChatBusy = false;
+  setText(
+    "chat-context-label",
+    `${digest.company_name || "当前公司"} · ${formatPeriod(digest.reporting_period)}`
+  );
+  const thread = $("chat-thread");
+  if (thread) {
+    thread.innerHTML = "";
+    appendChatMessage(
+      "assistant",
+      `我已经读入这份 ${digest.company_name || "公司"} 财报。你可以继续问某个模块、关键指标是否可靠、风险为什么重要，或让我把结论解释得更简单。`
+    );
+  }
+  setChatEnabled(true);
+}
+
+function setChatEnabled(enabled) {
+  const input = $("report-chat-input");
+  const submit = $("report-chat-submit");
+  if (input) {
+    input.disabled = !enabled;
+  }
+  if (submit) {
+    submit.disabled = !enabled || reportChatBusy;
+  }
+  document.querySelectorAll("#chat-suggestions button").forEach((button) => {
+    button.disabled = !enabled || reportChatBusy;
+  });
+}
+
+async function handleReportChatSubmit(event) {
+  event.preventDefault();
+  const input = $("report-chat-input");
+  const question = input?.value.trim() || "";
+  if (!question || !currentDigest || reportChatBusy) {
+    return;
+  }
+  input.value = "";
+  appendChatMessage("user", question);
+  await askReportQuestion(question);
+}
+
+async function askReportQuestion(question) {
+  reportChatBusy = true;
+  setChatEnabled(false);
+  const pending = appendChatMessage("assistant", "正在基于当前财报生成回答...", true);
+  try {
+    const response = await fetch("/api/chat/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        digest: currentDigest,
+        history: reportChatHistory.slice(-6),
+        audience: $("audience")?.value.trim() || currentDigest.audience,
+        language: $("language")?.value || currentDigest.analysis_language,
+      }),
+    });
+    if (!response.ok) {
+      let detail = await response.text();
+      try {
+        detail = JSON.parse(detail).detail || detail;
+      } catch {
+        // Keep raw server text.
+      }
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    pending.remove();
+    const answer = payload.answer_markdown || "没有生成可用回答。";
+    appendChatMessage("assistant", enrichAnswer(answer, payload));
+    reportChatHistory.push({ role: "user", content: question });
+    reportChatHistory.push({ role: "assistant", content: answer });
+  } catch (error) {
+    pending.remove();
+    appendChatMessage("assistant", `生成失败：${error.message}`);
+  } finally {
+    reportChatBusy = false;
+    setChatEnabled(Boolean(currentDigest));
+  }
+}
+
+function enrichAnswer(answer, payload) {
+  const followups = payload.followups || [];
+  const warnings = payload.warnings || [];
+  const sections = [answer];
+  if (followups.length) {
+    sections.push(`你还可以继续问：\n${followups.map((item) => `- ${item}`).join("\n")}`);
+  }
+  if (warnings.length) {
+    sections.push(`提示：\n${warnings.map((item) => `- ${item}`).join("\n")}`);
+  }
+  return sections.join("\n\n");
+}
+
+function appendChatMessage(role, content, loading = false) {
+  const thread = $("chat-thread");
+  const node = document.createElement("div");
+  node.className = `chat-message ${role}${loading ? " loading" : ""}`;
+  const avatar = document.createElement("span");
+  avatar.className = "message-avatar";
+  avatar.textContent = role === "user" ? "你" : "F";
+  const bubble = document.createElement("div");
+  bubble.className = "message-bubble";
+  bubble.innerHTML = renderChatText(content);
+  node.append(avatar, bubble);
+  thread?.append(node);
+  node.scrollIntoView({ behavior: "smooth", block: "end" });
+  return node;
+}
+
+function renderChatText(text) {
+  const lines = `${text || ""}`.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) {
+    return "<p></p>";
+  }
+  return lines
+    .map((line) => {
+      const normalized = normalizeChatLine(line);
+      if (normalized.isBullet) {
+        return `<p class="chat-bullet">${formatInlineMarkdown(normalized.text)}</p>`;
+      }
+      return `<p>${formatInlineMarkdown(normalized.text)}</p>`;
+    })
+    .join("");
+}
+
+function normalizeChatLine(line) {
+  let text = `${line || ""}`.replace(/^#{1,6}\s+/, "").trim();
+  let isBullet = false;
+  const bulletMatch = text.match(/^([-*•]|\d+[.)])\s+(.+)$/);
+  if (bulletMatch) {
+    isBullet = true;
+    text = bulletMatch[2].trim();
+  }
+  return { isBullet, text };
+}
+
+function formatInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/\*\*/g, "")
+    .replace(/__/g, "");
+}
+
 function chartColor(index) {
   return [palette.blue, palette.greenDark, palette.orange, palette.purple, palette.gray][index % 5];
 }
@@ -1016,6 +1195,15 @@ function escapeHtml(value) {
 
 function bindForm() {
   $("analysis-form")?.addEventListener("submit", handleGenerate);
+  $("report-chat-form")?.addEventListener("submit", handleReportChatSubmit);
+  document.querySelectorAll("#chat-suggestions button").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!currentDigest || reportChatBusy) {
+        return;
+      }
+      askReportQuestion(button.textContent.trim());
+    });
+  });
   $("download-json")?.addEventListener("click", downloadCurrentDigest);
   $("print-report")?.addEventListener("click", () => window.print());
   $("upload-zone")?.addEventListener("click", () => $("file-input")?.click());
@@ -1033,6 +1221,20 @@ function bindForm() {
         $("file-input").value = "";
       }
       setText("file-name", "支持 PDF / HTML / TXT");
+    }
+  });
+  $("demo-filing")?.addEventListener("change", (event) => {
+    const path = event.target.value;
+    if (!path) {
+      return;
+    }
+    selectedFile = null;
+    if ($("file-input")) {
+      $("file-input").value = "";
+    }
+    setText("file-name", "支持 PDF / HTML / TXT");
+    if ($("path-input")) {
+      $("path-input").value = path;
     }
   });
 }
@@ -1064,6 +1266,7 @@ function downloadCurrentDigest() {
 window.addEventListener("DOMContentLoaded", () => {
   bindForm();
   checkRuntime();
+  loadDemoFilings();
   setProgress("输入路径或上传文件后开始分析。", 0);
 });
 
