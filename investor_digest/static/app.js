@@ -214,6 +214,7 @@ async function requestDigest() {
   const path = $("path-input")?.value.trim() || "";
   const audience = $("audience")?.value.trim() || "普通投资者";
   const language = $("language")?.value || "zh-Hans";
+  const runtimeConfig = collectRuntimeConfig();
 
   if (!selectedFile && !path) {
     throw new Error("请先上传 10-K 财报文件，或输入本地财报路径。");
@@ -224,13 +225,32 @@ async function requestDigest() {
     formData.append("file", selectedFile);
     formData.append("audience", audience);
     formData.append("language", language);
+    appendRuntimeConfig(formData, runtimeConfig);
     return postDigest("/api/analyze/file", { method: "POST", body: formData });
   }
 
   return postDigest("/api/analyze/path", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, audience, language }),
+    body: JSON.stringify({ path, audience, language, ...runtimeConfig }),
+  });
+}
+
+function collectRuntimeConfig() {
+  const config = {
+    llm_provider: $("runtime-provider")?.value.trim() || "",
+    llm_base_url: $("runtime-base-url")?.value.trim() || "",
+    llm_model: $("runtime-model-input")?.value.trim() || "",
+    llm_api_key: $("runtime-api-key")?.value.trim() || "",
+  };
+  return Object.fromEntries(Object.entries(config).filter(([, value]) => value));
+}
+
+function appendRuntimeConfig(formData, runtimeConfig) {
+  Object.entries(runtimeConfig).forEach(([key, value]) => {
+    if (value) {
+      formData.append(key, value);
+    }
   });
 }
 
@@ -1090,6 +1110,7 @@ async function askReportQuestion(question) {
         history: reportChatHistory.slice(-6),
         audience: $("audience")?.value.trim() || currentDigest.audience,
         language: $("language")?.value || currentDigest.analysis_language,
+        ...collectRuntimeConfig(),
       }),
     });
     if (!response.ok) {

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from investor_digest.config import Settings
+from investor_digest.config import (
+    DEFAULT_DEEPSEEK_BASE_URL,
+    DEFAULT_DEEPSEEK_MODEL,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_OPENAI_BASE_URL,
+    DEFAULT_OPENAI_MODEL,
+    Settings,
+)
 from investor_digest.llm_client import LocalOpenAIClient
 from investor_digest.pipeline import analyze_path, prepare_path
 from investor_digest.schemas import AnalyzePathRequest, ReportChatRequest
@@ -39,8 +48,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/prepare/path")
     def prepare_from_path(request: AnalyzePathRequest) -> dict[str, object]:
+        request_settings = _settings_for_request(runtime_settings, request)
         try:
-            prepared = prepare_path(request.path, settings=runtime_settings)
+            prepared = prepare_path(request.path, settings=request_settings)
         except Exception as exc:  # pragma: no cover - API glue
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -54,10 +64,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/analyze/path")
     def analyze_from_path(request: AnalyzePathRequest) -> dict[str, object]:
+        request_settings = _settings_for_request(runtime_settings, request)
         try:
             digest = analyze_path(
                 request.path,
-                settings=runtime_settings,
+                settings=request_settings,
                 audience=request.audience,
                 language=request.language,
             )
@@ -71,7 +82,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file: UploadFile = File(...),
         audience: str | None = Form(default=None),
         language: str | None = Form(default=None),
+        llm_provider: str | None = Form(default=None),
+        llm_base_url: str | None = Form(default=None),
+        llm_api_key: str | None = Form(default=None),
+        llm_model: str | None = Form(default=None),
     ) -> dict[str, object]:
+        request_settings = _settings_for_request(
+            runtime_settings,
+            {
+                "llm_provider": llm_provider,
+                "llm_base_url": llm_base_url,
+                "llm_api_key": llm_api_key,
+                "llm_model": llm_model,
+            },
+        )
         suffix = Path(file.filename or "upload.txt").suffix or ".txt"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await file.read())
@@ -80,7 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             digest = analyze_path(
                 str(temp_path),
-                settings=runtime_settings,
+                settings=request_settings,
                 audience=audience,
                 language=language,
             )
@@ -93,8 +117,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/chat/report")
     def chat_with_report(request: ReportChatRequest) -> dict[str, object]:
+        request_settings = _settings_for_request(runtime_settings, request)
         try:
-            return _answer_report_question(request, settings=runtime_settings)
+            return _answer_report_question(request, settings=request_settings)
         except Exception as exc:  # pragma: no cover - API glue
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -102,6 +127,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+
+
+def _settings_for_request(settings: Settings, overrides: object) -> Settings:
+    def get_value(name: str) -> str:
+        if isinstance(overrides, dict):
+            raw = overrides.get(name)
+        else:
+            raw = getattr(overrides, name, None)
+        return str(raw or "").strip()
+
+    provider = get_value("llm_provider").lower()
+    base_url = get_value("llm_base_url")
+    api_key = get_value("llm_api_key")
+    model = get_value("llm_model")
+    if not any((provider, base_url, api_key, model)):
+        return settings
+
+    resolved_provider = provider or settings.llm_provider
+    resolved_base_url = base_url or settings.llm_base_url
+    resolved_model = model or settings.llm_model
+    resolved_api_key = api_key or settings.llm_api_key
+
+    if provider == "deepseek":
+        resolved_base_url = base_url or DEFAULT_DEEPSEEK_BASE_URL
+        resolved_model = model or DEFAULT_DEEPSEEK_MODEL
+    elif provider == "openai":
+        resolved_base_url = base_url or DEFAULT_OPENAI_BASE_URL
+        resolved_model = model or DEFAULT_OPENAI_MODEL
+    elif provider == "local":
+        resolved_base_url = base_url or DEFAULT_LLM_BASE_URL
+        resolved_model = model or DEFAULT_LLM_MODEL
+
+    return replace(
+        settings,
+        llm_provider=resolved_provider,
+        llm_base_url=resolved_base_url,
+        llm_api_key=resolved_api_key,
+        llm_model=resolved_model,
+    )
 
 
 def _list_local_filings(*, limit: int) -> list[dict[str, str]]:

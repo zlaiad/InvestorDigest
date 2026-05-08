@@ -91,6 +91,10 @@ class AnalyzePathRequest(BaseModel):
     path: str
     audience: str | None = None
     language: str | None = None
+    llm_provider: str | None = None
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
 
 
 class ReportChatMessage(BaseModel):
@@ -104,6 +108,10 @@ class ReportChatRequest(BaseModel):
     history: list[ReportChatMessage] = Field(default_factory=list)
     audience: str | None = None
     language: str | None = None
+    llm_provider: str | None = None
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
 
 
 @dataclass(slots=True)

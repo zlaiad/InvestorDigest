@@ -64,6 +64,32 @@
         </label>
         <button id="generate-button" class="generate-button" type="submit">生成报告</button>
       </form>
+      <details class="api-settings">
+        <summary>模型服务 / API Key（可选）</summary>
+        <div class="api-settings-grid">
+          <label class="field">
+            <span>服务商</span>
+            <select id="runtime-provider">
+              <option value="">使用后端默认配置</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="openai">OpenAI</option>
+              <option value="local">本地 OpenAI-Compatible</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Base URL</span>
+            <input id="runtime-base-url" type="text" placeholder="例如：https://api.deepseek.com/v1" />
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input id="runtime-model-input" type="text" placeholder="例如：deepseek-chat" />
+          </label>
+          <label class="field api-key-field">
+            <span>API Key</span>
+            <input id="runtime-api-key" type="password" placeholder="仅本次请求使用，不会保存" autocomplete="off" />
+          </label>
+        </div>
+      </details>
       <div class="runtime-strip">
         <div class="runtime-info">
           <span class="runtime-dot"></span>

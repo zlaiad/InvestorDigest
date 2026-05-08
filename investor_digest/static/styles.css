@@ -275,6 +275,28 @@ a {
   box-shadow: 0 0 0 3px rgba(63, 111, 244, 0.12);
 }
 
+.api-settings {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.api-settings summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: #536079;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.api-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1fr) minmax(180px, 0.9fr) minmax(260px, 1.2fr);
+  gap: 14px;
+  padding: 0 14px 14px;
+}
+
 .generate-button {
   min-width: 170px;
   height: 48px;
@@ -1527,6 +1549,10 @@ em.negative {
     grid-template-columns: 1fr;
   }
 
+  .api-settings-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .report-actions {
     justify-content: flex-start;
   }
@@ -1633,6 +1659,10 @@ em.negative {
   .demo-field,
   .generate-button {
     grid-column: auto;
+  }
+
+  .api-settings-grid {
+    grid-template-columns: 1fr;
   }
 
   .hero-copy {
